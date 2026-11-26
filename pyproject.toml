@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "archivero"
+version = "0.1.0"
+description = "Inventory, duplicate finder and cleanup planner for large, messy file trees (old NAS shares, backup drives)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Isaac Agudo" }]
+dependencies = []
+keywords = ["nas", "inventory", "duplicates", "cleanup", "forensics", "backup", "thunderbird", "mbox"]
+
+[project.optional-dependencies]
+photos = ["pillow"]
+music = ["mutagen"]
+archives = ["libarchive-c"]
+all = ["pillow", "mutagen", "libarchive-c"]
+dev = ["pytest"]
+
+[project.urls]
+Repository = "https://github.com/isaacagudo/archivero"
+
+[project.scripts]
+archivero = "archivero.cli:main"
+
+[tool.setuptools]
+packages = ["archivero", "archivero.detectors"]
