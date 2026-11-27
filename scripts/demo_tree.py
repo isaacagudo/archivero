@@ -104,6 +104,26 @@ def main(root):
         put(os.path.join(root, d, ".DS_Store"), 6148, ts(2018))
         put(os.path.join(root, d, "Thumbs.db"), 40000, ts(2012))
     put(os.path.join(root, "Network Trash Folder", "old.tmp"), 5_000_000, ts(2011))
+    # A partial copy of an old XP-era Dell laptop: only the main top folders were kept
+    xp = os.path.join(root, "Backups", "Old laptop")
+    prof = os.path.join(xp, "Documents and Settings", "Juan")
+    for i in range(30):
+        y = random.choice([2006, 2007, 2007, 2008])
+        put(os.path.join(prof, "Mis documentos", "doc_%02d.doc" % i), random.randint(20_000, 300_000), ts(y, random.randint(1, 12)))
+        put(os.path.join(prof, "Mis documentos", "Mis imágenes", "DSC%04d.JPG" % i), random.randint(800_000, 2_000_000), ts(y))
+    put(os.path.join(prof, "NTUSER.DAT"), 1_500_000, ts(2008))
+    put(os.path.join(prof, "Application Data", "Mozilla", "Firefox", "Profiles", "k3j2.default", "prefs.js"), 9000, ts(2008))
+    put(os.path.join(prof, "Application Data", "Mozilla", "Firefox", "Profiles", "k3j2.default", "places.sqlite"), 2_000_000, ts(2008))
+    for i in range(50):
+        put(os.path.join(prof, "Local Settings", "Temporary Internet Files", "Content.IE5", "f%03d.tmp" % i), 30_000, ts(2008))
+    for rel, size in [("Program Files/Dell/QuickSet/QuickSet.exe", 2_000_000),
+                      ("Program Files/Synaptics/SynTP/SynTPEnh.exe", 1_200_000),
+                      ("Program Files/Microsoft Office/OFFICE12/WINWORD.EXE", 12_000_000),
+                      ("Program Files/Dell Support Center/Latitude D630 support.exe", 3_000_000),
+                      ("WINDOWS/system32/kernel32.dll", 1_000_000), ("WINDOWS/system32/drivers/atapi.sys", 100_000),
+                      ("WINDOWS/Web/Wallpaper/Bliss.jpg", 200_000)]:
+        put(os.path.join(xp, *rel.split("/")), size, ts(2007))
+
     # Archives: a zip of a folder that is also on disk, and a tarball with photos found nowhere else
     os.makedirs(os.path.join(root, "Backups"), exist_ok=True)
     src = os.path.join(root, "Photos", "2016")

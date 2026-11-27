@@ -1,6 +1,7 @@
 # Telling personal data from system files
 
-**Status: design (planned for v0.2).** Old drives and NAS shares often contain whole
+**Status: zones and provenance implemented in v0.2 (`layouts.py`, `zones.py`); the
+known-file hash filter (section 2) is next.** Old drives and NAS shares often contain whole
 system disks copied as-is: a `C:` drive from 2006, a Mac home folder, a Linux root
 partition. The goal is to keep what a *person* created (photos, documents, mail,
 chats) and discard what an *operating system or installer* put there (executables,
@@ -105,24 +106,61 @@ documentation) under `/usr` from variable data under `/var`. User homes live in
 | `~/.config`, `~/.local/share`, `~/.mozilla`, `~/.thunderbird`, `~/.ssh`, `~/.gnupg` | user_appdata (`.ssh` and `.gnupg` are **sensitive**) |
 | `~/.cache`, `~/.local/share/Trash` | cache / trash |
 
+### Partial copies
+
+Backups rarely contain whole drives: often only `Documents and Settings` and
+`Program Files` were copied, or a single profile. Recognition therefore never
+requires a complete layout:
+
+- **Scored markers.** Every folder is judged by the names it contains, and each
+  marker adds a weight (`Documents and Settings` = 3, `Program Files` = 2,
+  `pagefile.sys` = 3…). A folder becomes a *Windows system drive*, *Windows profile*,
+  *Mac home*, etc. as soon as the evidence reaches a threshold.
+- **Anchored and free rules.** Zone rules are either anchored to a detected folder
+  (`win_root:windows` → system: only a `Windows` folder right below a recognized
+  drive) or free (`any:appdata/local/temp` → cache: specific enough to apply
+  anywhere, even in a lone copied profile).
+- **Implied drives.** A profile found under `Users`, `Documents and Settings` or
+  `home` implies the drive above it, even if nothing else of it was copied.
+
 ### Data format
 
-Layouts are **data files** (TOML), not code, so contributors can add an OS or a
-version without touching Python:
+Layouts are plain data in [`archivero/layouts.py`](../archivero/layouts.py), so adding
+an OS, a version, a localized folder name or a vendor clue needs no other code:
 
-```toml
-[[layout]]
-id = "windows-vista-plus-profile"
-detect.all = ["NTUSER.DAT", "AppData/"]
-zones."AppData/Local/Temp" = "cache"
-zones."AppData/Local/Microsoft/Windows/INetCache" = "cache"
-zones."AppData/Roaming" = "user_appdata"
-zones."Documents" = "user_data"
-zones."Pictures" = "user_data"
+```python
+SCOPES["win_profile"]["markers"]["mis documentos"] = 2      # evidence + weight
+SCOPES["win_profile"]["era"]["mis documentos"] = "2000/XP"  # what it says about the era
+ZONE_RULES.append(("any:appdata/local/temp", "cache"))       # free rule
+ZONE_RULES.append(("win_root:program files", "applications"))  # anchored rule
 ```
 
-Rules match relative to the detected root. The most specific rule wins. Folders
-under a zone inherit it unless a deeper rule overrides it.
+The deepest matching rule wins; folders inherit the zone of their parent unless a
+deeper rule overrides it.
+
+## 1b. Provenance: "where did this come from?"
+
+Each recognized drive or profile becomes a **source**, described from the evidence
+found inside it:
+
+| Clue | Examples | What it suggests |
+|---|---|---|
+| Layout era | `Documents and Settings`, `boot.ini` → 2000/XP; `AppData`, `$Recycle.Bin` → Vista or later; `swapfile.sys` → 8 or later | Windows generation, refined with file dates ("probably Windows 7") |
+| Vendor tools | `Dell QuickSet`, `SWSetup` (HP), `ThinkVantage`, `VAIO Care`, Boot Camp | Maker of the computer |
+| Model names | Latitude D630, ThinkPad T61, Satellite A200, MacBook Pro | Model |
+| Laptop hints | Synaptics/ALPS touchpad drivers, power managers, Wi-Fi drivers | Laptop rather than desktop |
+| Hardware | NVIDIA, ATI, Realtek, Intel wireless | Shown as evidence |
+| Software | Office 12 (2007), Windows Mail (Vista), MSN Messenger, Nokia PC Suite | Era of use |
+| Dates | Years of the personal files (5th–95th percentile, peak year) | When it was used |
+
+The result reads like *"Windows system drive (probably Windows XP), probably a Dell
+laptop (Latitude D630), personal files from 2006–2008 (most in 2007)"*, and every
+Firefox or Thunderbird profile inherits it: *"Firefox profile from Windows 2000/XP;
+source: …"*. When most files share one modification day, the description warns that
+the dates are probably those of a copy.
+
+The same engine runs on the members of archives and disk images, so a zipped or
+imaged old drive is described without extracting it.
 
 ## 2. File knowledge: known-file hash sets
 

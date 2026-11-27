@@ -24,20 +24,27 @@ source (deleting, moving) comes as late as possible and always with an undo.
 Goal: on a copied system disk, find what a person created and set aside what the OS
 and installers put there. Design in [`OS_LAYOUTS.md`](OS_LAYOUTS.md).
 
-- [ ] Detect OS roots and user homes (Windows 2000/XP and Vista or later, macOS,
-      Linux), guessing the era or version from the layout, `etc/os-release` and
-      `SystemVersion.plist`
-- [ ] Declarative TOML layouts that give every file a **zone** (`user_data`,
-      `user_appdata`, `cache`, `system`, `applications`, `trash`)
+- [x] Detect system drives and user profiles (Windows 9x to 10+, macOS, Linux/Unix)
+      from scored markers, so **partial copies** are recognized too
+- [x] Layout data that gives every file a **zone** (`user_data`, `user_appdata`,
+      `cache`, `system`, `applications`, `trash`)
+- [x] **Provenance**: describe each source from layout era, vendor tools, model
+      names, drivers, software and file dates ("probably a Dell laptop (Latitude
+      D630), personal files from 2006–2008"); inherited by Firefox/Thunderbird profiles
+- [x] Zone-based cleanup proposals (OS files, installed programs, caches) that flag
+      personal-looking files inside for review
+- [x] Valuable application data (iPhone backups, mail stores, browser profiles, keys)
+- [ ] Read `etc/os-release` and `SystemVersion.plist` when present for exact versions
 - [ ] Known-file filter: SHA-1 of software candidates checked against the CIRCL
       hashlookup Bloom filter (offline by default) and, optionally, NSRL RDSv3 or
       the online API
-- [ ] A "Personal data" view in the report, grouped by user profile, source machine
-      and year
+- [x] "Where this came from" and "Personal data" views in the report, `sources.csv`,
+      and zone/source columns in `files.csv`
 - [ ] `Windows.old`, `*.photoslibrary` packages and iCloud Drive handled as special
       cases
-- [ ] Apply layouts and the known-file filter to **members of disk images** too, so a
-      `.vmdk` or `.dmg` of an old machine is triaged without being extracted
+- [x] Apply layouts to **members of archives and disk images**, so a zipped or imaged
+      old drive is described and triaged without being extracted
+- [ ] Apply the known-file filter to archive members too
 
 ## v0.3: email, inside the mailboxes
 

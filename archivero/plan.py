@@ -80,6 +80,15 @@ def make_plan(an, dest, out):
                 w.writerow(["skip_cleanup", path, "", cat, date or "", src or "", size, note])
                 count("skip_cleanup", size)
                 continue
+            zone = an.file_zone.get(fid)
+            if zone == "user_appdata":
+                source = an.file_source.get(fid)
+                base = an.source_name(source) if source else d
+                tag = safe_name(os.path.basename(base) or "_root")
+                target = os.path.join(dest, "App_data", tag, os.path.relpath(path, base))
+                w.writerow(["copy", path, unique(target), cat, date or "", src or "", size, "application data"])
+                count("copy", size)
+                continue
             year = date[:4] if date else "no_date"
             month = date[:7] if date else "no_date"
             parent = safe_name(os.path.basename(d)) if d != an.root else "_root"

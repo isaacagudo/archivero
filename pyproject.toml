@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "archivero"
-version = "0.1.0"
+version = "0.2.0.dev0"
 description = "Inventory, duplicate finder and cleanup planner for large, messy file trees (old NAS shares, backup drives)."
 readme = "README.md"
 requires-python = ">=3.9"
