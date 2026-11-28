@@ -33,6 +33,11 @@ DEFAULTS = {
     "media_thumb_quality": 80,
     "media_max_read_mb": 512,       # images up to this size are read once into memory
     "media_tiny_px": 256,           # images this small with no camera in EXIF are flagged as non-personal
+    # Known-file filter (archivero known, ADR 0007)
+    "known_bloom": "",              # default CIRCL hashlookup Bloom filter (hashlookup-full.bloom)
+    "known_nsrl": "",               # default NSRL RDSv3 SQLite database
+    "known_workers": 4,             # parallel reads while computing SHA-1
+    "known_max_gb": 0.5,            # larger files are not hashed for the filter
     # Music
     "music_folder_min_files": 3,
     "music_folder_share": 0.6,

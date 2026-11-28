@@ -34,10 +34,14 @@ and installers put there. Design in [`OS_LAYOUTS.md`](OS_LAYOUTS.md).
 - [x] Zone-based cleanup proposals (OS files, installed programs, caches) that flag
       personal-looking files inside for review
 - [x] Valuable application data (iPhone backups, mail stores, browser profiles, keys)
-- [ ] Read `etc/os-release` and `SystemVersion.plist` when present for exact versions
-- [ ] Known-file filter: SHA-1 of software candidates checked against the CIRCL
-      hashlookup Bloom filter (offline by default) and, optionally, NSRL RDSv3 or
-      the online API
+- [x] Exact OS versions from the files that state them: the Windows `SOFTWARE` registry
+      hive (or `prodspec.ini`), `SystemVersion.plist`, `etc/os-release` and the Linux
+      release files ([ADR 0008](adr/0008-exact-os-versions.md))
+- [x] Known-file filter (`archivero known`, [ADR 0007](adr/0007-known-file-filter.md)): SHA-1
+      of software candidates checked against the CIRCL hashlookup Bloom filter (offline),
+      NSRL RDSv3 and, only with `--online`, the CIRCL API; known files become
+      `known_software` proposals and unknown executables in system folders are listed
+- [ ] Exact OS versions for drives inside archives and disk images
 - [x] "Where this came from" and "Personal data" views in the report, `sources.csv`,
       and zone/source columns in `files.csv`
 - [ ] `Windows.old`, `*.photoslibrary` packages and iCloud Drive handled as special

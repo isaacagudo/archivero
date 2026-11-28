@@ -127,6 +127,21 @@ CREATE TABLE IF NOT EXISTS media (
 CREATE INDEX IF NOT EXISTS idx_media_date ON media(date_taken);
 CREATE INDEX IF NOT EXISTS idx_media_dhash ON media(dhash);
 
+-- Known-file filter (ADR 0007): SHA-1 of software-like files, looked up in public hash sets
+-- (CIRCL hashlookup Bloom filter, NSRL RDSv3, optionally the CIRCL API). Built by 'archivero known'.
+--   status : known | unknown (not in any set checked so far) | NULL (not looked up yet)
+CREATE TABLE IF NOT EXISTS known (
+    hash       TEXT PRIMARY KEY,   -- BLAKE2b-160, the same as files.full_hash
+    sha1       TEXT NOT NULL,      -- upper-case hex, as the hash sets store it
+    status     TEXT,
+    source     TEXT,               -- set that knows it: bloom:<name> | nsrl:<name> | circl-api
+    name       TEXT,               -- file name given by the set, when it gives one
+    checked    TEXT,               -- sets it was looked up in, comma-separated
+    hashed_at  REAL,
+    checked_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_known_sha1 ON known(sha1);
+
 -- Every copy of every indexed asset: files on disk and members of archives or disk images.
 CREATE VIEW IF NOT EXISTS media_instances AS
     SELECT m.hash, 'file' AS origin, f.path, NULL AS container, NULL AS inner_path,

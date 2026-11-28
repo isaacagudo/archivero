@@ -304,3 +304,34 @@ MARKER_FILES = {"ntuser.dat", "ntuser.ini", "pagefile.sys", "hiberfil.sys", "swa
                 "bootmgr", "ntldr", "autoexec.bat", "config.sys", "io.sys", "msdos.sys", "vmlinuz",
                 "initrd.img", ".bashrc", ".profile", ".bash_history", ".bash_logout", ".xsession-errors",
                 ".xinitrc", ".zshrc", ".viminfo", ".cfusertextencoding", "prefs.js"}
+
+# -----------------------------------------------------------------------------------
+# Files that state the exact OS version, relative to a system drive (lower case).
+# 'scan' reads them when it meets them at these paths (osversion.py); the first one
+# found, in this order, describes the drive.
+# -----------------------------------------------------------------------------------
+VERSION_FILES = [
+    ("windows/system32/config/software", "registry"),   # HKLM\SOFTWARE hive: ProductName, build
+    ("winnt/system32/config/software", "registry"),
+    ("windows/system32/prodspec.ini", "prodspec"),       # Windows 2000/XP/2003
+    ("winnt/system32/prodspec.ini", "prodspec"),
+    ("system/library/coreservices/systemversion.plist", "plist"),
+    ("system/library/coreservices/serverversion.plist", "plist"),
+    ("etc/os-release", "os_release"),
+    ("usr/lib/os-release", "os_release"),
+    ("etc/lsb-release", "lsb_release"),
+    ("etc/redhat-release", "release_line"),
+    ("etc/centos-release", "release_line"),
+    ("etc/fedora-release", "release_line"),
+    ("etc/suse-release", "release_line"),
+    ("etc/slackware-version", "release_line"),
+    ("etc/gentoo-release", "release_line"),
+    ("etc/debian_version", "debian_version"),
+]
+
+MAC_RELEASE_NAMES = {
+    "10.0": "Cheetah", "10.1": "Puma", "10.2": "Jaguar", "10.3": "Panther", "10.4": "Tiger", "10.5": "Leopard",
+    "10.6": "Snow Leopard", "10.7": "Lion", "10.8": "Mountain Lion", "10.9": "Mavericks", "10.10": "Yosemite",
+    "10.11": "El Capitan", "10.12": "Sierra", "10.13": "High Sierra", "10.14": "Mojave", "10.15": "Catalina",
+    "11": "Big Sur", "12": "Monterey", "13": "Ventura", "14": "Sonoma", "15": "Sequoia", "26": "Tahoe",
+}

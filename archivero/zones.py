@@ -10,13 +10,16 @@ The same engine works on disk paths and on the members of an archive or disk ima
 """
 
 import fnmatch
+import os
 import re
 import time
 from collections import Counter, defaultdict
 
+from .detectors.base import PRUNED
+
 from .layouts import (APP_PROFILE_PATHS, HARDWARE_CLUES, HOME_SCOPES, LAPTOP_CLUES, MARKER_FILES, MODEL_CLUES,
                       PROFILE_CONTAINERS, ROOT_SCOPES, SCOPES, SOFTWARE_ERA_CLUES, VALUABLE_APPDATA,
-                      VENDOR_CLUES, ZONE_RULES)
+                      VENDOR_CLUES, VERSION_FILES, ZONE_RULES)
 
 # ----------------------------------------------------------------------------- rules
 
@@ -36,6 +39,7 @@ def _compile_rules():
 
 
 _EXACT, _GLOBBED, _LEAF_FILES = _compile_rules()
+_VERSION_RANK = {rel: i for i, (rel, _) in enumerate(VERSION_FILES)}
 
 
 def _seg_match(pat, seg):
@@ -101,6 +105,7 @@ class Source:
         self.hardware = set()
         self.software = set()
         self.apps = []             # (kind, path segs, hint)
+        self.os_version = None     # from a version file inside the drive (osversion.py)
         self._seen_names = set()
 
     # -- evidence -----------------------------------------------------------------
@@ -203,15 +208,25 @@ class Source:
     def profiles(self):
         return [p.segs[-1] for p in self.places if p.scope in HOME_SCOPES]
 
+    def set_version(self, rec):
+        """Keep the version file with the highest priority (lowest 'rank')."""
+        if self.os_version is None or rec.get("rank", 99) < self.os_version.get("rank", 99):
+            self.os_version = rec
+
     def describe(self):
         parts = [self.kind()]
         era = self.era()
-        if era.startswith("probably "):
-            os_txt = "probably %s %s" % (self.os, era[len("probably "):])
+        if self.os_version:
+            v = self.os_version
+            build = v.get("build")
+            parts[0] += " (%s%s)" % (v["name"], ", build %s" % build if build and build not in v["name"] else "")
         else:
-            os_txt = self.os + (" " + era if era else "")
-        if self.os != "unknown" and (os_txt != self.os or self.os not in parts[0]):
-            parts[0] += " (%s)" % os_txt
+            if era.startswith("probably "):
+                os_txt = "probably %s %s" % (self.os, era[len("probably "):])
+            else:
+                os_txt = self.os + (" " + era if era else "")
+            if self.os != "unknown" and (os_txt != self.os or self.os not in parts[0]):
+                parts[0] += " (%s)" % os_txt
         vendor = self.vendor_guess()
         model = self.model_guess(vendor)
         device = "laptop" if self.laptop else "computer"
@@ -233,6 +248,8 @@ class Source:
 
     def evidence(self):
         ev = []
+        if self.os_version:
+            ev.append("version from %s: %s" % (self.os_version["file"], self.os_version["name"]))
         for p in self.places:
             ev.append("%s at '%s' (%s)" % (p.label, "/".join(p.segs) or ".", ", ".join(p.markers[:6])))
         if self.vendor:
@@ -317,6 +334,20 @@ class Layout:
             s.places.append(p)
         return self
 
+    def add_version(self, dir_segs, rec):
+        """Attach a parsed version file (osversion.py) to the drive it belongs to, if one was detected."""
+        rel = rec.get("file", "")
+        parent = tuple(rel.split("/")[:-1])
+        dir_segs = tuple(dir_segs)
+        if not rel or len(parent) > len(dir_segs):
+            return None
+        root = dir_segs[:len(dir_segs) - len(parent)]
+        src = self.sources.get(root)
+        if src is None or tuple(s.lower() for s in dir_segs[len(root):]) != parent:
+            return None
+        src.set_version(dict(rec, rank=_VERSION_RANK.get(rel, 99)))
+        return src
+
     # -- queries ------------------------------------------------------------------
     def zone(self, segs):
         """Zone of a folder (tuple of segments). Returns (zone, rule) or ('unknown', None)."""
@@ -365,6 +396,20 @@ class Layout:
                 break
         self._src_cache[segs] = res
         return res
+
+
+def disk_layout(con, root):
+    """Layout of the files on disk in an inventory, plus the path -> segments function it uses."""
+    def segs(p):
+        rel = os.path.relpath(p, root)
+        return () if rel == "." else tuple(rel.split(os.sep))
+
+    lay = Layout()
+    for (path,) in con.execute("SELECT path FROM files"):
+        lay.add_file(segs(path))
+    for (p,) in con.execute("SELECT path FROM detections WHERE mode=?", (PRUNED,)):
+        lay.add_dir(segs(p))
+    return lay.finish(), segs
 
 
 def app_profile_hint(segs):

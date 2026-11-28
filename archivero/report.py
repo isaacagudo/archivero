@@ -27,6 +27,7 @@ details{margin:6px 0}summary{cursor:pointer}input{padding:6px;width:320px;margin
 
 CLEANUP_LABELS = {
     "obsolete_software": "Obsolete software",
+    "known_software": "Known OS and software files (public hash sets)",
     "old_installer": "Old stand-alone installers",
     "regenerable": "Regenerable dependencies and caches",
     "os_files": "Operating-system files (from copied system drives)",
@@ -38,6 +39,13 @@ CLEANUP_LABELS = {
     "system": "Internal system folders",
     "system_junk": "System helper files (.DS_Store, ._*)",
 }
+
+
+def known_cell(st):
+    """files.csv 'known' column: the set that knows the file, 'unknown', or empty if not looked up."""
+    if not st:
+        return ""
+    return (st[1] or "known") if st[0] == "known" else st[0]
 
 
 def write_csvs(an, out):
@@ -61,7 +69,7 @@ def write_csvs(an, out):
     with open(os.path.join(out, "files.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["path", "folder", "name", "category", "subtype", "zone", "source", "personal", "bytes", "date",
-                    "date_source", "hash", "duplicate_of", "unit", "cleanup_proposed"])
+                    "date_source", "hash", "duplicate_of", "unit", "cleanup_proposed", "known"])
         for fid, path, d, name, cat, sub, size, mtime, date, src, extra, h in sorted(an.files, key=lambda r: r[1]):
             unit = an.unit_of_dir(d)
             source = an.file_source.get(fid)
@@ -69,7 +77,8 @@ def write_csvs(an, out):
                         an.rel(an.source_name(source)) if source else "", "yes" if fid in an.personal_ids else "",
                         size, date or "", src or "", h or "",
                         an.rel(an.dup_of[fid]) if fid in an.dup_of else "",
-                        an.rel(unit[0]) if unit else "", "yes" if fid in an.cleanup_files else ""])
+                        an.rel(unit[0]) if unit else "", "yes" if fid in an.cleanup_files else "",
+                        known_cell(an.known_status.get(fid))])
 
     with open(os.path.join(out, "duplicates.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
@@ -89,10 +98,12 @@ def write_csvs(an, out):
 
     with open(os.path.join(out, "sources.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["source", "description", "os", "profiles", "files", "bytes", "personal_years", "evidence"])
+        w.writerow(["source", "description", "os", "os_version", "profiles", "files", "bytes", "personal_years",
+                    "evidence"])
         for src in sorted(an.layout.sources.values(), key=lambda s: s.segs):
             y = src.years()
-            w.writerow([an.rel(an.source_name(src)), src.describe(), src.os, "; ".join(src.profiles()), src.files,
+            ver = src.os_version["name"] if src.os_version else ""
+            w.writerow([an.rel(an.source_name(src)), src.describe(), src.os, ver, "; ".join(src.profiles()), src.files,
                         src.bytes, "%d-%d" % (y[0], y[1]) if y else "", " | ".join(src.evidence())])
 
     with open(os.path.join(out, "containers.csv"), "w", newline="", encoding="utf-8") as f:
@@ -228,6 +239,14 @@ def write_html(an, out, depth):
                 rel(p["path"]), "/" if p["is_dir"] else "", human(p["bytes"]), E(p["last_modified"]),
                 E(p["reason"])))
         a("</table></details>")
+    kn = sorted((p for p in an.cleanup if p["type"] == "known_software"), key=lambda p: -p["bytes"])
+    if kn:
+        a("<details open><summary>Known OS and software files (%d, %s)</summary><table><tr><th>Path</th>"
+          "<th class='n'>Size</th><th>Reason</th></tr>" % (len(kn), human(sum(p["bytes"] for p in kn))))
+        for p in kn[:300]:
+            a("<tr><td>%s%s</td><td class='n'>%s</td><td class='muted'>%s</td></tr>" % (
+                rel(p["path"]), "/" if p["is_dir"] else "", human(p["bytes"]), E(p["reason"])))
+        a("</table></details>")
     reg = sorted((p for p in an.cleanup if p["type"] == "regenerable"), key=lambda p: -p["bytes"])
     if reg:
         a("<details><summary>Dependencies and caches (%d, %s)</summary><ul>" % (
@@ -236,6 +255,26 @@ def write_html(an, out, depth):
             a("<li>%s <span class='muted'>%s · %d files</span></li>" % (rel(p["path"]), human(p["bytes"]),
                                                                        p["files"]))
         a("</ul></details>")
+
+    # Known files
+    a("<h2>Known files</h2>")
+    if not an.n_known_hashed:
+        a("<p class='muted'>Not checked yet. <code>archivero known --bloom hashlookup-full.bloom</code> recognizes "
+          "files shipped by operating systems and software vendors (CIRCL hashlookup, NSRL), offline.</p>")
+    else:
+        st = [v[0] for v in an.known_status.values()]
+        sets = ", ".join("%s%s" % (E(x.get("label", "")), " (%s entries, false-positive rate %g)" % (
+            "{:,}".format(x["entries"]), x.get("false_positive_rate") or 0) if x.get("entries") else "")
+            for x in an.known_sets) or "none yet"
+        a("<p>%d contents hashed (SHA-1). Files on disk: <b>%d known</b>, %d not in the sets checked. "
+          "Sets checked: %s.</p>" % (an.n_known_hashed, st.count("known"), st.count("unknown"), sets))
+        if an.unknown_sw:
+            a("<details><summary>Unknown executables in system or program folders (%d)</summary>"
+              "<p class='muted'>No set lists them: custom or newer software, a localized build, or a tampered "
+              "file. Worth a look before deleting a system drive.</p><ul>" % len(an.unknown_sw))
+            for path, size in an.unknown_sw[:200]:
+                a("<li>%s <span class='muted'>%s</span></li>" % (rel(path), human(size)))
+            a("</ul></details>")
 
     # By type
     a("<h2>By content type</h2><table><tr><th>Category</th><th class='n'>Files</th>"
