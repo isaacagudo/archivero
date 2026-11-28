@@ -1,0 +1,67 @@
+# Integration test of the known-file filter (ADR 0007) against the real CIRCL hashlookup
+# Bloom filter, on a self-hosted runner that keeps the ~1 GB filter cached between runs.
+#
+# Runner: label 'self-hosted' (or set the repository variable ARCHIVERO_RUNNER to another
+# label), with python3 >= 3.9, curl and about 1.5 GB free. The filter lives in
+# ARCHIVERO_CACHE_DIR (repository variable), by default ~/.cache/archivero, and is
+# downloaded again when it is more than 30 days old.
+#
+# The repository is public: jobs never run for pull requests from forks, so outside code
+# never reaches the runner.
+
+name: Known-file sets
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 4 * * 1"   # Mondays: catches format changes in CIRCL's filter
+  push:
+    branches: [main]
+    paths: ["archivero/known.py", "tests/test_known*.py", ".github/workflows/known-sets.yml"]
+  pull_request:
+    paths: ["archivero/known.py", "tests/test_known*.py", ".github/workflows/known-sets.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: known-sets
+  cancel-in-progress: false
+
+jobs:
+  real-sets:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ vars.ARCHIVERO_RUNNER || 'self-hosted' }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python environment
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q pytest
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+
+      - name: CIRCL hashlookup Bloom filter (cached)
+        env:
+          CACHE_DIR: ${{ vars.ARCHIVERO_CACHE_DIR }}
+        run: |
+          dir="${CACHE_DIR:-$HOME/.cache/archivero}"
+          mkdir -p "$dir"
+          f="$dir/hashlookup-full.bloom"
+          if [ ! -s "$f" ] || [ -n "$(find "$f" -mtime +30)" ]; then
+            curl -fL --retry 3 --retry-delay 30 -o "$f.part" https://cra.circl.lu/hashlookup/hashlookup-full.bloom
+            mv "$f.part" "$f"
+          fi
+          ls -l "$f"
+          echo "ARCHIVERO_BLOOM=$f" >> "$GITHUB_ENV"
+
+      - name: Online API too (scheduled and manual runs only)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: echo "ARCHIVERO_ONLINE=1" >> "$GITHUB_ENV"
+
+      - name: Tests against the real sets
+        run: python -m pytest -q -rs tests/test_known_sets.py
+
+      - name: Full test suite
+        run: python -m pytest -q

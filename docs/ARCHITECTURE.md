@@ -245,6 +245,10 @@ program folder copied out of its drive, or a loose installer, is recognized too.
 `known_bloom` and `known_nsrl` in the configuration name default sets. The report gains a "Known files" section
 (counts, sets, and unknown executables in system or program folders) and `files.csv` a `known` column.
 
+The unit tests use small filters built with `BloomFilter.write`. `tests/test_known_sets.py` checks the real CIRCL
+filter (`ARCHIVERO_BLOOM=path`) and API (`ARCHIVERO_ONLINE=1`) and is skipped without them; the *Known-file sets*
+workflow (`.github/workflows/known-sets.yml`) runs it on a self-hosted runner that keeps the filter cached.
+
 ## Performance
 
 - The walk is iterative (no recursion) with `os.scandir`, which reuses the
