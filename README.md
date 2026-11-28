@@ -31,6 +31,7 @@
 | 🧑‍💻 **Code projects** | Recognized as a whole (`package.json`, `.git`, `pom.xml`…), without getting lost in `node_modules` |
 | ✉️ **Email** | Thunderbird profiles and their **mbox** files, even without an extension, plus loose PST and EML files |
 | 🗜️ **Old software** | Folders of installers, ISOs and `.app` bundles that nobody has touched in years |
+| 🖥️ **Old computers** | Recognizes copied Windows, macOS and Linux drives and profiles, **even partial copies**, keeps personal files apart from system files, and says where they came from: *"probably a Dell laptop (Latitude D630), Windows XP, personal files from 2006–2008"* |
 | 🗃️ **Archives and disk images** | Looks inside zip, tar, 7z, rar, ISO, DMG, VMDK… **without extracting them**, and tells you whether a backup zip is already extracted somewhere else |
 | 👯 **Duplicates** | Confirmed by content in two passes, with a sensible rule for which copy to keep |
 | 🧹 **Junk** | `.DS_Store`, `Thumbs.db`, network trash folders, caches and regenerable dependencies |
@@ -132,6 +133,7 @@ flowchart LR
 | `files.csv` | Get one row per file: category, date, where the date came from, hash |
 | `duplicates.csv` | Review groups of identical copies, with the one to keep marked |
 | `units.csv` | List code projects and mail profiles, with their mailboxes |
+| `sources.csv` | See every copied drive or profile, what it looks like and the evidence behind it |
 | `containers.csv` | Review every archive and disk image: content, how much is already on disk, suggestion |
 | `archive_members.csv` | Browse the files inside archives without opening them |
 
@@ -161,8 +163,8 @@ catalogs, WhatsApp backups or virtual machines, takes a few lines. See
 
 ## 🗺️ Roadmap
 
-- **v0.2. Personal data vs. system files:** recognize Windows, macOS and Linux
-  layouts on copied system disks, and filter known software with the NSRL and CIRCL
+- **v0.2. Personal data vs. system files** (in progress): OS layouts, zones and
+  provenance are done; next is filtering known software with the NSRL and CIRCL
   hashlookup hash sets ([design](docs/OS_LAYOUTS.md)).
 - **v0.3. Email, inside the mailboxes:** messages, senders and dates for every mbox,
   and messages duplicated across profiles.

@@ -6,6 +6,7 @@ import os
 from datetime import datetime
 
 from .analysis import SUGGESTIONS
+from .layouts import ZONE_LABELS
 from .util import human
 
 E = html.escape
@@ -28,6 +29,9 @@ CLEANUP_LABELS = {
     "obsolete_software": "Obsolete software",
     "old_installer": "Old stand-alone installers",
     "regenerable": "Regenerable dependencies and caches",
+    "os_files": "Operating-system files (from copied system drives)",
+    "installed_programs": "Installed programs (from copied system drives)",
+    "cache_files": "Caches and temporary files",
     "duplicate": "Duplicates (another copy is kept)",
     "extracted_archive": "Archives whose content is already on disk",
     "trash": "Trash folders",
@@ -56,11 +60,14 @@ def write_csvs(an, out):
 
     with open(os.path.join(out, "files.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["path", "folder", "name", "category", "subtype", "bytes", "date", "date_source",
-                    "hash", "duplicate_of", "unit", "cleanup_proposed"])
+        w.writerow(["path", "folder", "name", "category", "subtype", "zone", "source", "personal", "bytes", "date",
+                    "date_source", "hash", "duplicate_of", "unit", "cleanup_proposed"])
         for fid, path, d, name, cat, sub, size, mtime, date, src, extra, h in sorted(an.files, key=lambda r: r[1]):
             unit = an.unit_of_dir(d)
-            w.writerow([an.rel(path), an.rel(d), name, cat, sub or "", size, date or "", src or "", h or "",
+            source = an.file_source.get(fid)
+            w.writerow([an.rel(path), an.rel(d), name, cat, sub or "", an.file_zone.get(fid, ""),
+                        an.rel(an.source_name(source)) if source else "", "yes" if fid in an.personal_ids else "",
+                        size, date or "", src or "", h or "",
                         an.rel(an.dup_of[fid]) if fid in an.dup_of else "",
                         an.rel(unit[0]) if unit else "", "yes" if fid in an.cleanup_files else ""])
 
@@ -80,25 +87,35 @@ def write_csvs(an, out):
             w.writerow(["", p["type"], p["path"], "yes" if p["is_dir"] else "", p["files"], p["bytes"],
                         human(p["bytes"]), p["last_modified"], p["reason"], p["kept_copy"]])
 
+    with open(os.path.join(out, "sources.csv"), "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["source", "description", "os", "profiles", "files", "bytes", "personal_years", "evidence"])
+        for src in sorted(an.layout.sources.values(), key=lambda s: s.segs):
+            y = src.years()
+            w.writerow([an.rel(an.source_name(src)), src.describe(), src.os, "; ".join(src.profiles()), src.files,
+                        src.bytes, "%d-%d" % (y[0], y[1]) if y else "", " | ".join(src.evidence())])
+
     with open(os.path.join(out, "containers.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["path", "format", "backend", "status", "files", "uncompressed_bytes", "main_content",
                     "found_on_disk_share", "confidence", "extracted_at", "personal_files",
-                    "personal_files_not_on_disk", "suggestion", "note"])
+                    "personal_files_not_on_disk", "suggestion", "what_it_looks_like", "note"])
         for c in sorted(an.containers.values(), key=lambda c: c["path"]):
             top = sorted(c["sz"].items(), key=lambda kv: -kv[1])[:4]
             w.writerow([an.rel(c["path"]), c["format"], c["backend"] or "", c["status"], c["files"], c["size"],
                         "; ".join("%s: %d" % (k, c["cnt"][k]) for k, _ in top),
                         "%.2f" % c["found_share"], c["confidence"],
                         an.rel(c["extracted_at"]) if c["extracted_at"] else "", c["personal"],
-                        sum(c["personal_missing"].values()), c["suggestion"], c["note"]])
+                        sum(c["personal_missing"].values()), c["suggestion"], c.get("hint", ""), c["note"]])
 
     with open(os.path.join(out, "archive_members.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["container", "inner_path", "category", "bytes", "date", "crc32", "hash", "encrypted"])
+        w.writerow(["container", "inner_path", "category", "zone", "bytes", "date", "crc32", "hash", "encrypted"])
         for row in an.con.execute("SELECT container, inner_path, category, size, date_best, crc32, full_hash, "
                                   "encrypted FROM members WHERE is_dir=0 ORDER BY container, inner_path"):
-            w.writerow([an.rel(row[0])] + [x if x is not None else "" for x in row[1:7]] + ["yes" if row[7] else ""])
+            zone = an.member_zone.get((row[0], row[1].replace("\\", "/")), "")
+            w.writerow([an.rel(row[0]), row[1], row[2] or "", zone] + [x if x is not None else "" for x in row[3:7]]
+                       + ["yes" if row[7] else ""])
 
     with open(os.path.join(out, "units.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
@@ -144,6 +161,51 @@ def write_html(an, out, depth):
     if pending_hash:
         a("<p class='warn'><b>%d</b> files share their size with others and have no hash yet. "
           "Run <code>archivero dupes</code> to confirm duplicates.</p>" % pending_hash)
+
+    # Sources
+    srcs = sorted(an.layout.sources.values(), key=lambda s: -s.bytes)
+    a("<h2>Where this came from</h2>")
+    if not srcs:
+        a("<p class='muted'>No copied system drives or user profiles recognized.</p>")
+    else:
+        a("<p class='muted'>Copied system drives and user profiles, recognized from their folder layout even when "
+          "only part was copied, and described from clues: layout era, vendor tools, drivers and file dates.</p>")
+        a("<table><tr><th>Folder</th><th>What it looks like</th><th>Profiles</th><th class='n'>Files</th>"
+          "<th class='n'>Size</th></tr>")
+        for src in srcs[:100]:
+            ev = "".join("<li>%s</li>" % E(e) for e in src.evidence())
+            a("<tr><td>%s</td><td>%s<details><summary class='muted'>evidence</summary><ul>%s</ul></details></td>"
+              "<td>%s</td><td class='n'>%d</td><td class='n'>%s</td></tr>" % (
+                  rel(an.source_name(src)) or ".", E(src.describe()), ev, E(", ".join(src.profiles())),
+                  src.files, human(src.bytes)))
+        a("</table>")
+
+    # Personal data
+    a("<h2>Personal data</h2>")
+    a("<table><tr><th>Zone</th><th class='n'>Files</th><th class='n'>Size</th></tr>")
+    for z in ("user_data", "user_appdata", "unknown", "applications", "system", "cache", "trash"):
+        if z in an.zone_tot:
+            n, b = an.zone_tot[z]
+            a("<tr><td>%s</td><td class='n'>%d</td><td class='n'>%s</td></tr>" % (E(ZONE_LABELS[z]), n, human(b)))
+    a("</table><p>%d files look personal (photos, videos, music, documents, mail) and sit in personal or "
+      "unrecognized folders.</p>" % len(an.personal_ids))
+    if an.valuable:
+        a("<details open><summary>Valuable application data (%d)</summary><ul>" % len(an.valuable))
+        for path, label in an.valuable[:200]:
+            a("<li>%s <span class='muted'>%s · %s</span></li>" % (
+                rel(path), E(label), human(an.agg.get(path, {}).get("size", 0))))
+        a("</ul></details>")
+    if an.app_profiles:
+        a("<details open><summary>Mail and browser profiles (%d)</summary><ul>" % len(an.app_profiles))
+        for path, kind, text in an.app_profiles[:200]:
+            a("<li>%s<br><span class='muted'>%s</span></li>" % (rel(path), E(text)))
+        a("</ul></details>")
+    if an.unusual_personal:
+        a("<details><summary>Personal-looking files inside system or program folders (%d folders)</summary>"
+          "<ul>" % len(an.unusual_personal))
+        for d, n in an.unusual_personal.most_common(50):
+            a("<li>%s <span class='muted'>%d files</span></li>" % (rel(d), n))
+        a("</ul></details>")
 
     # Cleanup
     a("<h2>Proposed cleanup</h2><p class='muted'>Nothing is deleted automatically. Review "
@@ -257,6 +319,8 @@ def write_html(an, out, depth):
             if miss:
                 sug += "<br><span class='muted'>%d personal files not on disk: %s</span>" % (miss, E(", ".join(
                     "%s %d" % kv for kv in c["personal_missing"].most_common(4))))
+            if c.get("hint"):
+                sug += "<br><span class='muted'>%s</span>" % E(c["hint"])
             if c["note"]:
                 sug += "<br><span class='muted'>%s</span>" % E(c["note"])
             a("<tr><td>%s <span class='muted'>%s</span></td><td class='n'>%d</td><td class='n'>%s</td>"
@@ -332,4 +396,4 @@ def report(an, out, depth=3):
     write_csvs(an, out)
     write_html(an, out, depth)
     print("Report written to %s/: report.html, cleanup_proposals.csv, folders.csv, files.csv, "
-          "duplicates.csv, units.csv, containers.csv, archive_members.csv" % out)
+          "duplicates.csv, units.csv, sources.csv, containers.csv, archive_members.csv" % out)

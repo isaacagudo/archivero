@@ -11,6 +11,7 @@ from .categories import DOC_CATS, MEDIA_CATS, is_software
 from .db import require_root
 from .detectors import PRUNED, UNIT_KINDS
 from .util import ancestors, human
+from .zones import Layout, app_profile_hint, valuable_appdata, year_of
 
 # Paths that look like backup copies (multilingual on purpose).
 BACKUPISH = re.compile(r"(\bcopia\b|\bcopy\b|backup|\bbak\b|\bold\b|antiguo|duplicad|\(\d+\)|~$)", re.I)
@@ -40,6 +41,14 @@ SUGGESTIONS = {
     "not_listed": "Not listed yet: run 'archives list'",
 }
 
+ZONE_CLEANUP = {
+    "system": ("os_files", "operating-system files"),
+    "applications": ("installed_programs", "installed programs (reinstall from the vendor if needed)"),
+    "cache": ("cache_files", "caches and temporary files"),
+    "trash": ("trash", "trash folder"),
+}
+KEEP_ZONES = {"user_data", "unknown"}  # where personal-looking files count as personal
+
 UNIT_LABELS = {"code_project": "Code project", "thunderbird_profile": "Thunderbird profile",
                "browser_profile": "Browser profile"}
 
@@ -64,6 +73,7 @@ class Analysis:
             "SELECT id, path, dir, name, category, subtype, size, mtime, date_best, date_source, "
             "extra, full_hash FROM files").fetchall()
         self._duplicates()
+        self._layout()
         self._containers()
         self._aggregate()
         self._cleanup()
@@ -109,6 +119,76 @@ class Analysis:
         self.dup_groups.sort(key=lambda g: -(len(g[2]) - 1) * g[1])
         self.dup_wasted = sum((len(g[2]) - 1) * g[1] for g in self.dup_groups)
 
+    # ------------------------------------------------------------ zones / sources
+    def segs(self, path):
+        rel = os.path.relpath(path, self.root)
+        return () if rel == "." else tuple(rel.split(os.sep))
+
+    def _layout(self):
+        """Zones for every file, and the sources (machines / profiles) they came from."""
+        lay = self.layout = Layout()
+        for f in self.files:
+            lay.add_file(self.segs(f[1]))
+        for r in self.pruned:
+            lay.add_dir(self.segs(r[0]))
+        lay.finish()
+        self.file_zone = {}
+        self.file_source = {}
+        self.zone_tot = defaultdict(lambda: [0, 0])
+        self.personal_ids = set()
+        unusual = Counter()
+        for fid, path, d, name, cat, sub, size, mtime, date, src, extra, h in self.files:
+            ds = self.segs(d)
+            zone = lay.file_zone(ds, name)[0]
+            self.file_zone[fid] = zone
+            self.zone_tot[zone][0] += 1
+            self.zone_tot[zone][1] += size or 0
+            personal = cat in PERSONAL_CATS and zone in KEEP_ZONES
+            if personal:
+                self.personal_ids.add(fid)
+            elif cat in PERSONAL_CATS and zone in ("system", "applications"):
+                unusual[d] += 1
+            source = lay.source_of(ds)
+            if source is not None:
+                self.file_source[fid] = source
+                source.observe_file(size, mtime, year_of(date), personal)
+                if cat in ("executable", "disk_image", "compressed", "config", "other", "no_extension"):
+                    source.observe_name(name)
+        for dsegs in lay.dirs():
+            if dsegs:
+                source = lay.source_of(dsegs)
+                if source is not None:
+                    source.observe_name(dsegs[-1])
+        self.unusual_personal = unusual
+        # Mail and browser profiles: where do they come from?
+        self.app_profiles = []
+        for path, kind in sorted(self.units.items()):
+            if kind not in ("thunderbird_profile", "browser_profile"):
+                continue
+            ps = self.segs(path)
+            os_name, era = app_profile_hint(ps)
+            source = lay.source_of(ps)
+            what = {"thunderbird_profile": "Thunderbird profile", "browser_profile": "Firefox profile"}[kind]
+            text = what
+            if os_name:
+                text += " from %s%s" % (os_name, " " + era if era else "")
+            if source is not None:
+                text += "; source: %s" % source.describe()
+            self.app_profiles.append((path, kind, text))
+        # Valuable application data (iPhone backups, mail stores, keys…), top-most folder only.
+        self.valuable = []
+        seen = set()
+        for dsegs in sorted(lay.dirs(), key=len):
+            if not dsegs or any(dsegs[:i] in seen for i in range(len(dsegs))):
+                continue
+            label = valuable_appdata(dsegs)
+            if label and label != valuable_appdata(dsegs[:-1]):
+                seen.add(dsegs)
+                self.valuable.append((os.path.join(self.root, *dsegs), label))
+
+    def source_name(self, source):
+        return os.path.join(self.root, *source.segs) if source else ""
+
     # ------------------------------------------------------ archives / images
     def _containers(self):
         """Compare each archive's members with the files on disk and suggest a next step."""
@@ -129,16 +209,38 @@ class Analysis:
         for c, inner, size, cat, h, name in self.con.execute(
                 "SELECT container, inner_path, size, category, full_hash, name FROM members WHERE is_dir=0"):
             members[c].append((inner.replace("\\", "/"), size or 0, cat, h, name or ""))
+        self.member_zone = {}
 
         for path, fmt, backend, status, n, nd, total, note in rows:
             mem = members.get(path, [])
             info = {"path": path, "format": fmt, "backend": backend, "status": status, "note": note or "",
                     "files": len(mem), "size": total or 0, "cnt": Counter(), "sz": Counter(),
                     "found": 0, "found_share": 0.0, "confidence": "", "extracted_at": "",
-                    "personal": 0, "personal_missing": Counter(), "sw_bytes": 0, "suggestion": ""}
+                    "personal": 0, "personal_missing": Counter(), "sw_bytes": 0, "suggestion": "",
+                    "zones": Counter(), "hint": ""}
             votes = defaultdict(lambda: [0, 0, set()])  # anchor -> [name+size matches, hash matches, dirs]
             tops = set()
             inspected = status == "inspected"
+            lay = Layout()
+            for inner, size, cat, h, name in mem:
+                lay.add_file(tuple(p for p in inner.split("/") if p))
+            lay.finish()
+            zones = Counter()
+            for inner, size, cat, h, name in mem:
+                parts = tuple(p for p in inner.split("/") if p)
+                z = lay.file_zone(parts[:-1], parts[-1] if parts else "")[0]
+                zones[z] += size
+                self.member_zone[(path, inner)] = z
+                src = lay.source_of(parts[:-1])
+                if src is not None:
+                    src.observe_file(size, None, None, cat in PERSONAL_CATS and z in KEEP_ZONES)
+                    src.observe_name(parts[-1] if parts else "")
+            for dsegs in lay.dirs():
+                src = lay.source_of(dsegs) if dsegs else None
+                if src is not None:
+                    src.observe_name(dsegs[-1])
+            info["zones"] = zones
+            info["hint"] = "; ".join(s.describe() for s in lay.sources.values())
             for inner, size, cat, h, name in mem:
                 info["cnt"][cat] += 1
                 info["sz"][cat] += size
@@ -149,11 +251,12 @@ class Analysis:
                     tops.add(parts[0] if len(parts) > 1 else "")
                 cands = by_name.get((name.lower(), size)) if size else None
                 found = bool(cands) or (inspected and h in by_hash)
+                keep = self.member_zone[(path, inner)] in KEEP_ZONES
                 if found:
                     info["found"] += 1
-                elif cat in PERSONAL_CATS:
+                elif cat in PERSONAL_CATS and keep:
                     info["personal_missing"][cat] += 1
-                if cat in PERSONAL_CATS:
+                if cat in PERSONAL_CATS and keep:
                     info["personal"] += 1
                 # Which folder would correspond to the archive root?
                 depth = len(parts) - 1
@@ -189,7 +292,7 @@ class Analysis:
                 sug = "already_extracted"
             elif missing and (missing >= 0.2 * nf or missing >= 50):
                 sug = "inspect"
-            elif info["size"] and info["sw_bytes"] / info["size"] >= 0.6:
+            elif info["size"] and (info["sw_bytes"] + zones["system"] + zones["applications"]) / info["size"] >= 0.6:
                 sug = "software_image"
             elif info["found_share"] >= 0.3:
                 sug = "partially_extracted"
@@ -293,6 +396,35 @@ class Analysis:
         cleanup_dirs = set()
         cleanup_files = set()
 
+        # 0) Operating-system, program and cache folders found by layout (top-most only).
+        lay = self.layout
+        zone_dirs = sorted((d for d in lay.dirs() if d), key=len)
+        regions = {}
+        for d in zone_dirs:
+            z = lay.zone(d)[0]
+            if z in ZONE_CLEANUP and lay.zone(d[:-1])[0] != z and not any(d[:i] in regions for i in range(len(d))):
+                regions[d] = z
+        personal_in = Counter()
+        for fid, path, d, name, cat, sub, size, mtime, date, src, extra, h in self.files:
+            if cat in PERSONAL_CATS and self.file_zone.get(fid) in ZONE_CLEANUP:
+                ds = self.segs(d)
+                for i in range(len(ds), 0, -1):
+                    if ds[:i] in regions:
+                        personal_in[ds[:i]] += 1
+                        break
+        for d, z in sorted(regions.items()):
+            p = os.path.join(self.root, *d)
+            a = self.agg.get(p)
+            if not a or self.unit_of_dir(p):
+                continue
+            ptype, what = ZONE_CLEANUP[z]
+            source = lay.source_of(d)
+            why = what + (" of " + source.describe() if source else "")
+            if personal_in[d]:
+                why += ". Review: %d files inside look personal (documents, photos…)" % personal_in[d]
+            props.append(self._prop(ptype, p, True, a["n"], a["size"], a["mmax"], why))
+            cleanup_dirs.add(p)
+
         # 1) Software folders untouched for years (top-most qualifying folders only).
         sw_set = set()
         for p in sorted(self.agg):
@@ -302,7 +434,7 @@ class Analysis:
             share = a["sw"] / a["size"] if a["size"] else 0
             if share < cfg["software_share"] or a["mmax"] >= self.cutoff:
                 continue
-            if self.unit_of_dir(p) or self._under(p, sw_set):
+            if self.unit_of_dir(p) or self._under(p, sw_set) or self._under(p, cleanup_dirs):
                 continue
             sw_set.add(p)
             props.append(self._prop("obsolete_software", p, True, a["n"], a["size"], a["mmax"],

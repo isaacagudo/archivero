@@ -40,7 +40,9 @@
 | `scanner.py` | Iterative walk with `os.scandir`; applies detectors and stores files |
 | `dupes.py` | Size → quick hash (first and last 64 KB) → full BLAKE2b, in parallel |
 | `archives.py` | List and hash archive / disk image members without extracting (zip, tar, libarchive and 7-Zip backends) |
-| `analysis.py` | Per-folder aggregates, units, duplicates, cleanup proposals, folder labels |
+| `layouts.py` | OS layout knowledge as data: scored markers, zone rules, provenance clues |
+| `zones.py` | Rebuilds the folder tree, detects drives and profiles (partial copies too), assigns zones, describes sources |
+| `analysis.py` | Per-folder aggregates, units, zones and sources, duplicates, cleanup proposals, folder labels |
 | `report.py` | Self-contained HTML report and CSV exports |
 | `plan.py` | Reorganization proposal and `apply` (copy) |
 
@@ -109,6 +111,7 @@ localized names such as `Enviados`).
 | `trash`, `system` | Local or network trash folders, internal OS folders |
 | `duplicate` | Identical copies. The copy kept is the one inside a unit, or the one that does not look like a backup, or the oldest, or the one with the shortest path |
 | `system_junk` | `.DS_Store`, `._*`, `Thumbs.db`… |
+| `os_files`, `installed_programs`, `cache_files` | Top-most folder of each `system`, `applications` or `cache` zone found by the layout engine. If personal-looking files sit inside, the reason says how many, so they can be reviewed |
 
 ## Archives and disk images (`archives.py`, `analysis.py`)
 
