@@ -45,6 +45,13 @@ and installers put there. Design in [`OS_LAYOUTS.md`](OS_LAYOUTS.md).
 - [x] Apply layouts to **members of archives and disk images**, so a zipped or imaged
       old drive is described and triaged without being extracted
 - [ ] Apply the known-file filter to archive members too
+- [x] **Media index** (milestone M0 for memento, ADRs 0005 and 0006): `archivero media` and
+      `scan --media` build a `media` table keyed by content hash, with normalized metadata
+      (capture date and offset, GPS, camera, lens, size, orientation, duration, codecs),
+      a 320 px WebP thumbnail cache, a 64-bit dHash and a non-personal flag; pictures inside
+      archives are streamed in memory with `--archives`
+- [ ] Media index: thumbnails for videos inside archives, sensor size and serial numbers
+      from RAW maker notes
 
 ## v0.3: email, inside the mailboxes
 
@@ -73,8 +80,9 @@ and installers put there. Design in [`OS_LAYOUTS.md`](OS_LAYOUTS.md).
 - [ ] Merkle folder hash to find **whole duplicated folders** (copies of a project,
       "Photos (copy)"), even when they were renamed
 - [ ] Near-identical folders: percentage of shared files
-- [ ] Richer EXIF: camera, optional GPS, grouping into events
-- [ ] Optional perceptual hashing for near-duplicate photos
+- [x] Richer EXIF: camera, GPS (in the media index)
+- [x] Perceptual hashing for near-duplicate photos (dHash in the media index; grouping is done by memento)
+- [ ] Grouping into events
 
 ## v0.5: safe actions
 

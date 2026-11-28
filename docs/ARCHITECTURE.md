@@ -45,6 +45,7 @@
 | `analysis.py` | Per-folder aggregates, units, zones and sources, duplicates, cleanup proposals, folder labels |
 | `report.py` | Self-contained HTML report and CSV exports |
 | `plan.py` | Reorganization proposal and `apply` (copy) |
+| `media_index.py` | `archivero media`: the media index (metadata, thumbnails, dHash, non-personal flags) |
 
 ## Data model
 
@@ -65,14 +66,24 @@
   date, CRC32 when the format stores it) and, after `archives inspect`, their
   BLAKE2b hash. They are classified like any other file, but are not part of
   `files`, so they never end up in the reorganization plan on their own.
+- **`media`**: one row per unique photo or video, keyed by content hash (the same
+  BLAKE2b as `files.full_hash` and `members.full_hash`). See [Media index](#media-index-media_indexpy).
+  The **`media_instances`** view lists every copy of each one: files on disk and archive members.
 - **`errors`**: paths that could not be read.
 - **`meta`**: inventory root, the configuration used, and the schema version.
 
 ### Migrations
 
-`db.SCHEMA_VERSION` goes up with every schema change. `open_db()` will run the pending
-migrations in order: add a `_migrate_N_to_N+1(con)` function for each step. A database
-created by a newer version is rejected.
+`db.SCHEMA_VERSION` goes up with every schema change; memento depends on it (`files`,
+`members`, `media`). `open_db()` runs the pending migrations in order: add a
+`_migrate_N_to_N+1(con)` function to `db.MIGRATIONS` for each step. New tables need no
+code, since the schema only uses `CREATE … IF NOT EXISTS`. A database created by a newer
+version is rejected.
+
+| Version | Change |
+|---|---|
+| 1 | v0.1–v0.2 tables |
+| 2 | `media` table and `media_instances` view (milestone M0) |
 
 ## Detectors
 
@@ -142,6 +153,53 @@ wins, so a renamed folder is still found. The suggestions are:
 
 Archives with personal content are never treated as software, so an old `.dmg` or
 `.zip` holding photos is not proposed as an "old installer".
+
+## Media index (`media_index.py`)
+
+`archivero media` (or `scan --media`) builds the index memento reads ([ADR 0005](adr/0005-media-index.md)).
+It needs Pillow; ffmpeg and `pillow-heif` are optional.
+
+- **Read once.** A photo is read into memory once (up to `media_max_read_mb`), and those bytes
+  give the hash, the metadata, the thumbnail and the dHash. A video is hashed in one streaming
+  pass; then ffprobe reads its header and ffmpeg decodes one frame.
+- **Once per content.** Copies whose hash is already known (from `dupes`, `archives inspect`
+  or an earlier run) are not read again. Copies not hashed yet must be read to be hashed, but
+  are not decoded twice. The hash is saved to `files.full_hash` / `members.full_hash`.
+- **Resumable.** A run picks up whatever has no `media` row yet. Rows are `ok`, `error` (not
+  retried; `--force` re-indexes everything) or `partial`, with what was `missing`:
+  `ffmpeg`, `heif` (both retried once the tool is installed), `archive_video` (a video seen
+  only inside an archive: completed when a copy on disk turns up) or `raw` (no preview found).
+- **Metadata** comes only from the content: EXIF `DateTimeOriginal` (then `DateTimeDigitized`,
+  then `DateTime`) with its offset, GPS, make, model, body serial, lens, software and
+  orientation; for videos, codecs, duration, rotation, the QuickTime local creation date (else
+  `creation_time`, in UTC), ISO 6709 location and the Apple/Android make and model. Dates per
+  copy (file name, `mtime`) stay in `files` and `members`; memento weighs them all.
+- **Thumbnails**: WebP, 320 px on the longest side, orientation applied, stored by hash in
+  `<db>.media/ab/cd/<hash>.webp` (relative path in `media.thumb`). JPEGs are decoded at a reduced
+  scale (`draft`). RAW files use their largest embedded JPEG preview; their EXIF is read from the
+  TIFF structure when there is one. HEIC/HEIF needs `pillow-heif`.
+- **dHash**: 64-bit difference hash (9×8 greyscale), 16 hex digits, from the oriented image or
+  the video frame. Near duplicates are within a few bits of each other.
+- **Long videos** (`video_long`, usually films) are left out unless `--long-videos`.
+- **Archives**: with `--archives`, pictures inside listed archives and disk images are streamed
+  in memory through the archive backends, as `archives inspect` does. Nothing is extracted.
+
+### Non-personal flags ([ADR 0006](adr/0006-non-personal-images.md))
+
+Recomputed at the end of every run, from the content and from **every** copy:
+
+| Reason | Rule |
+|---|---|
+| `zone:system`, `zone:applications`, `zone:cache` | The copy sits in that zone (`zones.py`). `trash` and `user_appdata` are not reasons |
+| `icon_folder`, `wallpaper_or_sample_folder`, `cache_folder` | A folder on the way is named like one (`icons`, `Sample Pictures`, `Wallpaper`, `Temporary Internet Files`…) |
+| `code_project`, `browser_profile` | The copy is inside one of those units |
+| `tiny` | At most `media_tiny_px` (256) on its longest side, with no camera in EXIF |
+| `stock_name` | Named like a picture shipped with Windows or macOS (`Koala.jpg`, `Bliss.jpg`…), with no camera in EXIF |
+
+An asset is flagged when a content reason applies (`tiny`, `stock_name`) or when **all** of its
+copies have a place reason: a photo that is in a browser cache and also in `Pictures` stays
+personal. The flag (`nonpersonal`, with the reasons in `nonpersonal_why`) is data: memento hides
+flagged assets by default, and nothing is deleted.
 
 ## Performance
 

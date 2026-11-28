@@ -1,6 +1,6 @@
 # 0006. archivero flags images nobody took
 
-- Status: Proposed
+- Status: Accepted (implemented in v0.2, milestone M0)
 - Date: 2026-11-28
 
 ## Context

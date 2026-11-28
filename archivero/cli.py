@@ -11,6 +11,7 @@ EPILOG = """Typical workflow:
   archivero scan   /mnt/nas/alice --db nas.db
   archivero dupes  --db nas.db
   archivero archives list --db nas.db         # what is inside zips and disk images
+  archivero media  --db nas.db                # photo/video index + thumbnails (for memento)
   archivero report --db nas.db --out report
   archivero plan   --db nas.db --dest /Volumes/New --out plan.csv
   archivero apply  --plan plan.csv            # dry run
@@ -39,6 +40,16 @@ def main(argv=None):
                    help="don't measure node_modules, .git, trash folders… (faster)")
     p.add_argument("--archives", action="store_true",
                    help="also list the contents of archives and disk images (reads their index only)")
+    p.add_argument("--media", action="store_true",
+                   help="then build the media index (see 'archivero media'; with --archives, inside them too)")
+
+    p = sub.add_parser("media", help="index photos and videos: metadata, thumbnails, dHash (resumable)")
+    common(p)
+    p.add_argument("--archives", action="store_true",
+                   help="also index pictures inside listed archives and disk images (streamed in memory)")
+    p.add_argument("--long-videos", action="store_true", help="include long videos (movies), skipped by default")
+    p.add_argument("--force", action="store_true", help="re-index everything, even content already indexed")
+    p.add_argument("--workers", type=int, help="parallel reads (default 4)")
 
     p = sub.add_parser("archives", help="list or inspect archives and disk images without extracting them")
     p.add_argument("action", choices=["list", "inspect"],
@@ -82,6 +93,14 @@ def main(argv=None):
             if args.archives:
                 from .archives import list_containers
                 list_containers(con, cfg)
+            if args.media:
+                from .media_index import build_media_index
+                build_media_index(con, cfg, archives=args.archives)
+        elif args.cmd == "media":
+            from .media_index import build_media_index
+            if args.workers:
+                cfg["media_workers"] = args.workers
+            build_media_index(con, cfg, archives=args.archives, long_videos=args.long_videos, force=args.force)
         elif args.cmd == "archives":
             from .archives import inspect_containers, list_containers
             if args.action == "list":
