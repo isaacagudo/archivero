@@ -3,7 +3,7 @@
 import sqlite3
 import sys
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -87,6 +87,55 @@ CREATE TABLE IF NOT EXISTS members (
 );
 CREATE INDEX IF NOT EXISTS idx_members_container ON members(container);
 CREATE INDEX IF NOT EXISTS idx_members_size ON members(size);
+CREATE INDEX IF NOT EXISTS idx_members_full ON members(full_hash);
+
+-- Media index (ADR 0005): one row per unique photo or video, keyed by its content hash
+-- (the same BLAKE2b as files.full_hash and members.full_hash). Built by 'archivero media'.
+--   status : ok | partial (something could not be read yet, see 'missing') | error
+--   date_* : only dates stored inside the content; per-copy dates stay in files/members
+CREATE TABLE IF NOT EXISTS media (
+    hash          TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL,   -- image | raw | video
+    format        TEXT,            -- JPEG, PNG, HEIF, MPEG-4…
+    size          INTEGER,
+    width         INTEGER,         -- as displayed (orientation applied)
+    height        INTEGER,
+    orientation   INTEGER,         -- EXIF orientation 1-8, or video rotation in degrees
+    duration      REAL,
+    video_codec   TEXT,
+    audio_codec   TEXT,
+    date_taken    TEXT,            -- 'YYYY-MM-DD HH:MM:SS', as recorded (local time unless date_offset says)
+    date_source   TEXT,            -- exif_original | exif_digitized | exif_datetime | quicktime | video_utc
+    date_offset   TEXT,            -- '+02:00' when recorded
+    gps_lat       REAL,
+    gps_lon       REAL,
+    gps_alt       REAL,
+    make          TEXT,
+    model         TEXT,
+    serial        TEXT,
+    lens          TEXT,
+    software      TEXT,
+    dhash         TEXT,            -- 64-bit difference hash, 16 hex digits
+    thumb         TEXT,            -- WebP path relative to the thumbnail cache (<db>.media/)
+    nonpersonal   INTEGER DEFAULT 0,  -- ADR 0006: icon, wallpaper, cache… (a flag, never a deletion)
+    nonpersonal_why TEXT,
+    status        TEXT,
+    missing       TEXT,            -- partial rows: ffmpeg | heif | raw | archive_video
+    error         TEXT,
+    indexed_at    REAL
+);
+CREATE INDEX IF NOT EXISTS idx_media_date ON media(date_taken);
+CREATE INDEX IF NOT EXISTS idx_media_dhash ON media(dhash);
+
+-- Every copy of every indexed asset: files on disk and members of archives or disk images.
+CREATE VIEW IF NOT EXISTS media_instances AS
+    SELECT m.hash, 'file' AS origin, f.path, NULL AS container, NULL AS inner_path,
+           f.size, f.mtime, f.date_best, f.date_source
+      FROM media m JOIN files f ON f.full_hash = m.hash
+    UNION ALL
+    SELECT m.hash, 'member', mb.container || '/' || mb.inner_path, mb.container, mb.inner_path,
+           mb.size, mb.mtime, mb.date_best, NULL
+      FROM media m JOIN members mb ON mb.full_hash = m.hash;
 """
 
 
@@ -99,10 +148,26 @@ def open_db(path):
     if v is None:
         set_meta(con, "schema_version", SCHEMA_VERSION)
         con.commit()
-    elif int(v) > SCHEMA_VERSION:
+        return con
+    v = int(v)
+    if v > SCHEMA_VERSION:
         sys.exit("Database %s was created by a newer archivero (schema %s)." % (path, v))
-    # Migrations go here when SCHEMA_VERSION is bumped (see docs/ARCHITECTURE.md).
+    while v < SCHEMA_VERSION:
+        MIGRATIONS[v](con)
+        v += 1
+        set_meta(con, "schema_version", v)
+        con.commit()
     return con
+
+
+def _migrate_1_to_2(con):
+    """v0.2 M0: 'media' table and 'media_instances' view (created by SCHEMA above)."""
+
+
+# MIGRATIONS[n] upgrades a database from schema n to n + 1. SCHEMA only uses
+# CREATE … IF NOT EXISTS, so new tables appear on their own; a migration handles
+# changes to existing tables (ALTER TABLE, backfills).
+MIGRATIONS = {1: _migrate_1_to_2}
 
 
 def get_meta(con, key, default=None):

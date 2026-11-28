@@ -8,7 +8,10 @@ disk space). Handy for trying archivero and for screenshots.
 import io
 import os
 import random
+import shutil
+import subprocess
 import sys
+import tempfile
 import tarfile
 import time
 import zipfile
@@ -30,6 +33,67 @@ def put(path, size, mtime=None, content=None):
         os.utime(path, (mtime, mtime))
 
 
+try:  # with Pillow, photos are real JPEGs (padded to a realistic size), so 'archivero media' has work to do
+    from PIL import Image, ImageDraw
+except ImportError:
+    Image = None
+FFMPEG = shutil.which("ffmpeg")
+
+
+def photo(path, size, mtime=None, date=None, camera=("Canon", "Canon PowerShot A520"), wh=(640, 480)):
+    """A real JPEG with EXIF (date, camera), then sparse padding up to 'size'."""
+    if Image is None:
+        return put(path, size, mtime)
+    im = Image.new("RGB", wh, tuple(random.randint(0, 255) for _ in range(3)))
+    d = ImageDraw.Draw(im)
+    for _ in range(6):
+        x, y = random.randint(0, wh[0]), random.randint(0, wh[1])
+        d.ellipse((x, y, x + random.randint(20, 200), y + random.randint(20, 200)),
+                  fill=tuple(random.randint(0, 255) for _ in range(3)))
+    ex = Image.Exif()
+    if camera:
+        ex[0x010F], ex[0x0110] = camera
+    if date:
+        ex.get_ifd(0x8769)[0x9003] = date.strftime("%Y:%m:%d %H:%M:%S")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if path.lower().endswith(".png"):
+        im.save(path, "PNG")
+    else:
+        im.save(path, "JPEG", quality=85, exif=ex)
+    with open(path, "r+b") as f:
+        f.truncate(max(size, os.path.getsize(path)))
+    if mtime:
+        os.utime(path, (mtime, mtime))
+
+
+def video(path, size, mtime=None, date=None):
+    """A real one-second clip when ffmpeg is installed, padded up to 'size'."""
+    if not FFMPEG:
+        return put(path, size, mtime)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    meta = ["-metadata", "creation_time=" + date.strftime("%Y-%m-%dT%H:%M:%SZ")] if date else []
+    subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=320x240:rate=10:decimals=%d" % random.randint(0, 2), "-t", "1",
+                    "-metadata", "comment=%d" % random.getrandbits(32)] + meta + ["-pix_fmt", "yuv420p", path],
+                   check=True)
+    with open(path, "r+b") as f:
+        f.truncate(max(size, os.path.getsize(path)))
+    if mtime:
+        os.utime(path, (mtime, mtime))
+
+
+def jpeg_bytes(wh=(640, 480)):
+    if Image is None:
+        return os.urandom(2048) + bytes(random.randint(100_000, 400_000))
+    tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+    tmp.close()
+    photo(tmp.name, 0, camera=("SONY", "DSC-P72"), wh=wh)
+    with open(tmp.name, "rb") as f:
+        data = f.read()
+    os.unlink(tmp.name)
+    return data
+
+
 def ts(y, m=6, d=15):
     return time.mktime(datetime(y, m, d, 12).timetuple())
 
@@ -41,11 +105,11 @@ def main(root):
             ev = os.path.join(root, "Photos", str(y), "%d-%02d event" % (y, m))
             for i in range(random.randint(8, 25)):
                 d = random.randint(1, 28)
-                put(os.path.join(ev, "IMG_%d%02d%02d_%04d.jpg" % (y, m, d, i)),
-                    random.randint(2_000_000, 6_000_000), ts(y, m, d))
+                photo(os.path.join(ev, "IMG_%d%02d%02d_%04d.jpg" % (y, m, d, i)),
+                      random.randint(2_000_000, 6_000_000), ts(y, m, d), datetime(y, m, d, random.randint(8, 21)))
             if random.random() < 0.5:
-                put(os.path.join(ev, "VID_%d%02d01_0001.mp4" % (y, m)), random.randint(40_000_000, 300_000_000),
-                    ts(y, m))
+                video(os.path.join(ev, "VID_%d%02d01_0001.mp4" % (y, m)), random.randint(40_000_000, 300_000_000),
+                      ts(y, m), datetime(y, m, 1, 12))
     # A duplicated copy of some photos
     src = os.path.join(root, "Photos", "2015")
     for dirpath, _, files in os.walk(src):
@@ -110,19 +174,25 @@ def main(root):
     for i in range(30):
         y = random.choice([2006, 2007, 2007, 2008])
         put(os.path.join(prof, "Mis documentos", "doc_%02d.doc" % i), random.randint(20_000, 300_000), ts(y, random.randint(1, 12)))
-        put(os.path.join(prof, "Mis documentos", "Mis imágenes", "DSC%04d.JPG" % i), random.randint(800_000, 2_000_000), ts(y))
+        photo(os.path.join(prof, "Mis documentos", "Mis imágenes", "DSC%04d.JPG" % i), random.randint(800_000, 2_000_000),
+              ts(y), datetime(y, 6, 15, 12), ("SONY", "DSC-P72"))
     put(os.path.join(prof, "NTUSER.DAT"), 1_500_000, ts(2008))
     put(os.path.join(prof, "Application Data", "Mozilla", "Firefox", "Profiles", "k3j2.default", "prefs.js"), 9000, ts(2008))
     put(os.path.join(prof, "Application Data", "Mozilla", "Firefox", "Profiles", "k3j2.default", "places.sqlite"), 2_000_000, ts(2008))
     for i in range(50):
         put(os.path.join(prof, "Local Settings", "Temporary Internet Files", "Content.IE5", "f%03d.tmp" % i), 30_000, ts(2008))
+    for i in range(8):  # cached web images and application icons: flagged as non-personal by 'archivero media'
+        photo(os.path.join(prof, "Local Settings", "Temporary Internet Files", "Content.IE5", "banner%d.jpg" % i),
+              0, ts(2008), camera=None, wh=(468, 60))
+        photo(os.path.join(xp, "Program Files", "Dell", "QuickSet", "icons", "icon%d.png" % i), 0, ts(2007),
+              camera=None, wh=(32, 32))
     for rel, size in [("Program Files/Dell/QuickSet/QuickSet.exe", 2_000_000),
                       ("Program Files/Synaptics/SynTP/SynTPEnh.exe", 1_200_000),
                       ("Program Files/Microsoft Office/OFFICE12/WINWORD.EXE", 12_000_000),
                       ("Program Files/Dell Support Center/Latitude D630 support.exe", 3_000_000),
-                      ("WINDOWS/system32/kernel32.dll", 1_000_000), ("WINDOWS/system32/drivers/atapi.sys", 100_000),
-                      ("WINDOWS/Web/Wallpaper/Bliss.jpg", 200_000)]:
+                      ("WINDOWS/system32/kernel32.dll", 1_000_000), ("WINDOWS/system32/drivers/atapi.sys", 100_000)]:
         put(os.path.join(xp, *rel.split("/")), size, ts(2007))
+    photo(os.path.join(xp, "WINDOWS", "Web", "Wallpaper", "Bliss.jpg"), 200_000, ts(2007), camera=None, wh=(800, 600))
 
     # Archives: a zip of a folder that is also on disk, and a tarball with photos found nowhere else
     os.makedirs(os.path.join(root, "Backups"), exist_ok=True)
@@ -134,7 +204,7 @@ def main(root):
                 z.write(p, os.path.join("2016", os.path.relpath(p, src)))
     with tarfile.open(os.path.join(root, "Backups", "old laptop photos.tar.gz"), "w:gz") as t:
         for i in range(40):
-            data = os.urandom(2048) + bytes(random.randint(100_000, 400_000))
+            data = jpeg_bytes()
             ti = tarfile.TarInfo("Pictures/2007/DSC%05d.JPG" % i)
             ti.size, ti.mtime = len(data), ts(2007, random.randint(1, 12))
             t.addfile(ti, io.BytesIO(data))

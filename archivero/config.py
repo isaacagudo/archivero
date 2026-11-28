@@ -27,6 +27,12 @@ DEFAULTS = {
     "archive_stream_max_gb": 1.0,   # list index-less archives (tar.gz…) only below this size
     "archive_member_max_gb": 4.0,   # 'inspect' skips members larger than this
     "archive_match_share": 0.9,     # share of members found on disk to call it "already extracted"
+    # Media index (archivero media)
+    "media_workers": 4,             # parallel reads
+    "media_thumb_px": 320,          # longest side of the WebP thumbnails
+    "media_thumb_quality": 80,
+    "media_max_read_mb": 512,       # images up to this size are read once into memory
+    "media_tiny_px": 256,           # images this small with no camera in EXIF are flagged as non-personal
     # Music
     "music_folder_min_files": 3,
     "music_folder_share": 0.6,

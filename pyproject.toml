@@ -15,9 +15,10 @@ keywords = ["nas", "inventory", "duplicates", "cleanup", "forensics", "backup", 
 
 [project.optional-dependencies]
 photos = ["pillow"]
+heif = ["pillow", "pillow-heif"]
 music = ["mutagen"]
 archives = ["libarchive-c"]
-all = ["pillow", "mutagen", "libarchive-c"]
+all = ["pillow", "pillow-heif", "mutagen", "libarchive-c"]
 dev = ["pytest"]
 
 [project.urls]

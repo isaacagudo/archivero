@@ -1,6 +1,6 @@
 # 0005. Media index keyed by content hash, with thumbnails
 
-- Status: Proposed
+- Status: Accepted (implemented in v0.2, milestone M0)
 - Date: 2026-11-28
 
 ## Context

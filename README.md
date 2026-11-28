@@ -25,7 +25,7 @@
 
 | | |
 |---|---|
-| 📸 **Photos and videos** | The real date of every photo (EXIF, the file name or the modification date). Tells home videos apart from movies |
+| 📸 **Photos and videos** | The real date of every photo (EXIF, the file name or the modification date). Tells home videos apart from movies. A **media index** with metadata, thumbnails and perceptual hashes for [memento](https://github.com/isaacagudo/memento) |
 | 🎵 **Music** | Album folders and, if you want, artist and album from the ID3 tags |
 | 📄 **Documents** | PDFs, Word files, spreadsheets and slides, grouped by year |
 | 🧑‍💻 **Code projects** | Recognized as a whole (`package.json`, `.git`, `pom.xml`…), without getting lost in `node_modules` |
@@ -82,6 +82,22 @@ That confirms or rules out the matches: an archive is only proposed for cleanup 
 | 7z, rar, cab, iso, xar, cpio | [`libarchive-c`](https://pypi.org/project/libarchive-c/) (`pip install ".[archives]"`) or 7-Zip |
 | dmg, vmdk, vhd/vhdx, vdi, qcow2, wim, img | [7-Zip](https://www.7-zip.org/) command line (`brew install sevenzip`, `apt install 7zip`) |
 
+### Photo and video index
+
+```bash
+pip install ".[photos]"                   # Pillow; ".[heif]" adds HEIC, ffmpeg adds videos
+archivero media --db nas.db               # or: archivero scan … --media
+archivero media --db nas.db --archives    # also pictures inside listed archives and disk images
+```
+
+`media` reads every photo **once** and keeps, for each unique picture (identical copies count
+once): capture date and time zone offset, GPS, camera, lens, size, orientation, video duration
+and codecs, a **320 px WebP thumbnail** (in `nas.db.media/`, next to the database) and a
+**perceptual hash** to find resized copies. Icons, wallpapers, sample pictures and cached web
+images are **flagged, not removed**. It is resumable, like everything else, and it is what
+[memento](https://github.com/isaacagudo/memento) builds its timeline from. Details in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#media-index-media_indexpy).
+
 Happy with the proposal? Generate a plan and apply it **by copying** into a new
 structure:
 
@@ -92,7 +108,8 @@ archivero apply --plan plan.csv --execute                         # real copy
 ```
 
 Want to try it without touching your data? `python3 scripts/demo_tree.py /tmp/demo`
-builds a sample tree that looks like 19 GB but uses only 160 MB of disk.
+builds a sample tree that looks like 21 GB but uses under 300 MB of disk. With Pillow
+(and ffmpeg) its photos and clips are real, so `archivero media` has something to index.
 
 ## 🧭 How it works
 
@@ -104,6 +121,7 @@ flowchart LR
     C --> D
     D -->|report| R[report.html<br/>CSV]
     D -->|plan| P[plan.csv<br/>editable]
+    D -->|media| M[Media index<br/>+ thumbnails]
     P -->|apply| N[(New structure<br/>copy only)]
 ```
 
@@ -150,9 +168,10 @@ long_video_min = 40      # minutes before a video counts as a movie (with --prob
 code = ["cairo", "move"]
 ```
 
-Optional extras: `pillow` (EXIF dates, `--exif`), `mutagen` (audio tags, `--tags`),
-`libarchive-c` and 7-Zip (more archive and disk image formats) and ffmpeg's
-`ffprobe` (video duration, `--probe-video`).
+Optional extras: `pillow` (EXIF dates, `--exif`, and the media index), `pillow-heif`
+(HEIC photos in the media index), `mutagen` (audio tags, `--tags`), `libarchive-c` and
+7-Zip (more archive and disk image formats) and ffmpeg (video duration with
+`--probe-video`; video metadata and thumbnails in the media index).
 
 ## 🔌 Extensible
 
@@ -163,9 +182,9 @@ catalogs, WhatsApp backups or virtual machines, takes a few lines. See
 
 ## 🗺️ Roadmap
 
-- **v0.2. Personal data vs. system files** (in progress): OS layouts, zones and
-  provenance are done; next is filtering known software with the NSRL and CIRCL
-  hashlookup hash sets ([design](docs/OS_LAYOUTS.md)).
+- **v0.2. Personal data vs. system files** (in progress): OS layouts, zones,
+  provenance and the media index are done; next is filtering known software with the
+  NSRL and CIRCL hashlookup hash sets ([design](docs/OS_LAYOUTS.md)).
 - **v0.3. Email, inside the mailboxes:** messages, senders and dates for every mbox,
   and messages duplicated across profiles.
 - **v0.4:** whole duplicated folders (Merkle hash) and near-identical photos.
