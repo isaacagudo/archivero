@@ -12,6 +12,7 @@ EPILOG = """Typical workflow:
   archivero dupes  --db nas.db
   archivero archives list --db nas.db         # what is inside zips and disk images
   archivero media  --db nas.db                # photo/video index + thumbnails (for memento)
+  archivero known  --db nas.db --bloom hashlookup-full.bloom   # recognize OS and software files
   archivero report --db nas.db --out report
   archivero plan   --db nas.db --dest /Volumes/New --out plan.csv
   archivero apply  --plan plan.csv            # dry run
@@ -49,6 +50,19 @@ def main(argv=None):
                    help="also index pictures inside listed archives and disk images (streamed in memory)")
     p.add_argument("--long-videos", action="store_true", help="include long videos (movies), skipped by default")
     p.add_argument("--force", action="store_true", help="re-index everything, even content already indexed")
+    p.add_argument("--workers", type=int, help="parallel reads (default 4)")
+
+    p = sub.add_parser("known", help="recognize OS and software files by SHA-1 in public hash sets (resumable)")
+    common(p)
+    p.add_argument("--bloom", action="append", default=[], metavar="FILE",
+                   help="CIRCL hashlookup Bloom filter (offline; can be repeated)")
+    p.add_argument("--nsrl", action="append", default=[], metavar="FILE",
+                   help="NIST NSRL RDSv3 SQLite database (offline; can be repeated)")
+    p.add_argument("--online", action="store_true",
+                   help="also ask the CIRCL hashlookup API, for executables only (sends their SHA-1)")
+    p.add_argument("--images", action="store_true",
+                   help="also look up pictures outside user folders, in the offline sets only")
+    p.add_argument("--force", action="store_true", help="hash every candidate again")
     p.add_argument("--workers", type=int, help="parallel reads (default 4)")
 
     p = sub.add_parser("archives", help="list or inspect archives and disk images without extracting them")
@@ -101,6 +115,11 @@ def main(argv=None):
             if args.workers:
                 cfg["media_workers"] = args.workers
             build_media_index(con, cfg, archives=args.archives, long_videos=args.long_videos, force=args.force)
+        elif args.cmd == "known":
+            from .known import run_known
+            if args.workers:
+                cfg["known_workers"] = args.workers
+            run_known(con, cfg, args.bloom, args.nsrl, args.online, args.images, args.force)
         elif args.cmd == "archives":
             from .archives import inspect_containers, list_containers
             if args.action == "list":

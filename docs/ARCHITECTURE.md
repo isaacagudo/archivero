@@ -46,6 +46,8 @@
 | `report.py` | Self-contained HTML report and CSV exports |
 | `plan.py` | Reorganization proposal and `apply` (copy) |
 | `media_index.py` | `archivero media`: the media index (metadata, thumbnails, dHash, non-personal flags) |
+| `known.py` | `archivero known`: SHA-1 of software-like files, looked up in the CIRCL Bloom filter, NSRL or the CIRCL API |
+| `osversion.py` | Parsers for the files that state an OS version (registry hive, `SystemVersion.plist`, `os-release`…) |
 
 ## Data model
 
@@ -69,6 +71,8 @@
 - **`media`**: one row per unique photo or video, keyed by content hash (the same
   BLAKE2b as `files.full_hash` and `members.full_hash`). See [Media index](#media-index-media_indexpy).
   The **`media_instances`** view lists every copy of each one: files on disk and archive members.
+- **`known`**: one row per hashed content (keyed by the same BLAKE2b), with its SHA-1 and what the
+  known-file sets said about it. See [Known-file filter](#known-file-filter-knownpy).
 - **`errors`**: paths that could not be read.
 - **`meta`**: inventory root, the configuration used, and the schema version.
 
@@ -83,7 +87,7 @@ version is rejected.
 | Version | Change |
 |---|---|
 | 1 | v0.1–v0.2 tables |
-| 2 | `media` table and `media_instances` view (milestone M0) |
+| 2 | `media` table and `media_instances` view (milestone M0); later also the `known` table, a new table only, so the version did not change |
 
 ## Detectors
 
@@ -123,6 +127,7 @@ localized names such as `Enviados`).
 | `duplicate` | Identical copies. The copy kept is the one inside a unit, or the one that does not look like a backup, or the oldest, or the one with the shortest path |
 | `system_junk` | `.DS_Store`, `._*`, `Thumbs.db`… |
 | `os_files`, `installed_programs`, `cache_files` | Top-most folder of each `system`, `applications` or `cache` zone found by the layout engine. If personal-looking files sit inside, the reason says how many, so they can be reviewed |
+| `known_software` | After `archivero known`: the top-most folder where files known to the hash sets hold at least `software_share` of the bytes (personal-looking files inside are counted in the reason), and single known files of `software_min_bytes` or more. Known files also count as software in folder totals |
 
 ## Archives and disk images (`archives.py`, `analysis.py`)
 
@@ -195,11 +200,54 @@ Recomputed at the end of every run, from the content and from **every** copy:
 | `code_project`, `browser_profile` | The copy is inside one of those units |
 | `tiny` | At most `media_tiny_px` (256) on its longest side, with no camera in EXIF |
 | `stock_name` | Named like a picture shipped with Windows or macOS (`Koala.jpg`, `Bliss.jpg`…), with no camera in EXIF |
+| `known_file` | Its hash is in a known-file set (`archivero known --images`, [ADR 0007](adr/0007-known-file-filter.md)) |
 
-An asset is flagged when a content reason applies (`tiny`, `stock_name`) or when **all** of its
+An asset is flagged when a content reason applies (`tiny`, `stock_name`, `known_file`) or when **all** of its
 copies have a place reason: a photo that is in a browser cache and also in `Pictures` stays
 personal. The flag (`nonpersonal`, with the reasons in `nonpersonal_why`) is data: memento hides
 flagged assets by default, and nothing is deleted.
+
+## Exact OS versions (`osversion.py`, [ADR 0008](adr/0008-exact-os-versions.md))
+
+`scan` reads the file where an OS records its version when it meets one at the expected path
+(`layouts.VERSION_FILES`), and stores what it says in `files.extra` as `os_version`:
+
+| OS | File (relative to the drive) | What it gives |
+|---|---|---|
+| Windows | `Windows/System32/config/SOFTWARE` | Registry hive, `Microsoft\Windows NT\CurrentVersion`: product, service pack or display version (`22H2`), build |
+| Windows 2000/XP | `Windows/System32/prodspec.ini` | Product (`Windows XP Professional`), when the hive was not copied |
+| macOS | `System/Library/CoreServices/SystemVersion.plist` | Product, version and build; the release name is added (`10.6` → Snow Leopard) |
+| Linux | `etc/os-release`, `usr/lib/os-release`, `etc/lsb-release`, `etc/*-release`, `etc/debian_version` | Distribution and version |
+
+The hive reader is a minimal read-only regf parser that seeks along the path to one key, so it reads a few
+kilobytes; text files are read up to 64 KB. The analysis attaches the version to the drive the file belongs to
+and it replaces the era guess in the description.
+
+## Known-file filter (`known.py`)
+
+`archivero known` ([ADR 0007](adr/0007-known-file-filter.md)) recognizes OS and software files by content, so a
+program folder copied out of its drive, or a loose installer, is recognized too.
+
+1. **Candidates**, by category and zone: software (executables, libraries, disk images, archives named like
+   installers) anywhere; code, configuration, unknown types and files with no extension outside `user_data`;
+   pictures outside `user_data` only with `--images`. Never documents, photos, video, audio, mail, keys or
+   databases, nor `pagefile.sys`/`hiberfil.sys`, nor files above `known_max_gb` (0.5).
+2. **Hashing**: one read gives BLAKE2b (saved to `files.full_hash` when missing) and SHA-1. A content already in
+   `known` is not read again, so the command is resumable.
+3. **Lookups** of every content not known yet, against each set given:
+   - `--bloom FILE`: the CIRCL hashlookup Bloom filter (DCSO format: a 48-byte header, then the bit array; 64-bit
+     FNV-1 of the upper-case SHA-1). It is checked in place with `mmap`; nothing is loaded or sent.
+   - `--nsrl FILE`: an NSRL RDSv3 SQLite database, opened read-only; one pass over its `FILE` view per batch.
+   - `--online`: the CIRCL bulk API, only for the SHA-1s of executables that no offline set knows and that were
+     never sent before.
+4. The sets used are kept in `meta.known_sets`; the media index's non-personal flags are recomputed.
+
+`known_bloom` and `known_nsrl` in the configuration name default sets. The report gains a "Known files" section
+(counts, sets, and unknown executables in system or program folders) and `files.csv` a `known` column.
+
+The unit tests use small filters built with `BloomFilter.write`. `tests/test_known_sets.py` checks the real CIRCL
+filter (`ARCHIVERO_BLOOM=path`) and API (`ARCHIVERO_ONLINE=1`) and is skipped without them; the *Known-file sets*
+workflow (`.github/workflows/known-sets.yml`) runs it on a self-hosted runner that keeps the filter cached.
 
 ## Performance
 

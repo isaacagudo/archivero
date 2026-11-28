@@ -25,9 +25,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .dates import plausible
 from .db import require_root
-from .detectors import PRUNED
 from .util import Progress, human
-from .zones import Layout
+from .zones import Layout, disk_layout
 
 KIND_OF = {"image": "image", "raw": "raw", "video_short": "video", "video_long": "video"}
 CHUNK = 1024 * 1024
@@ -674,18 +673,9 @@ def flag_nonpersonal(con, cfg):
         return 0
     places = defaultdict(list)  # hash -> [set of reasons per copy]
     names = defaultdict(set)
-
-    def segs(p):
-        rel = os.path.relpath(p, root)
-        return () if rel == "." else tuple(rel.split(os.sep))
-
+    known = {h for (h,) in con.execute("SELECT hash FROM known WHERE status='known'")}
+    lay, segs = disk_layout(con, root)
     files = con.execute("SELECT path, dir, name, full_hash FROM files").fetchall()
-    lay = Layout()
-    for path, d, name, h in files:
-        lay.add_file(segs(path))
-    for (p,) in con.execute("SELECT path FROM detections WHERE mode=?", (PRUNED,)):
-        lay.add_dir(segs(p))
-    lay.finish()
     units = sorted(((p, k) for p, k in con.execute("SELECT path, kind FROM detections")
                     if k in UNIT_REASONS), key=lambda t: -len(t[0]))
 
@@ -727,6 +717,8 @@ def flag_nonpersonal(con, cfg):
     n = 0
     for h, rec in media.items():
         why = content_reasons(rec, names[h], cfg)
+        if h in known:
+            why.add("known_file")  # ADR 0007: in a public set of files shipped by OS and software vendors
         copies = places.get(h) or []
         if copies and all(copies):
             why |= set().union(*copies)

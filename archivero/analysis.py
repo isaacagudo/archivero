@@ -8,7 +8,7 @@ import time
 from collections import defaultdict, Counter
 
 from .categories import DOC_CATS, MEDIA_CATS, is_software
-from .db import require_root
+from .db import get_meta, require_root
 from .detectors import PRUNED, UNIT_KINDS
 from .util import ancestors, human
 from .zones import Layout, app_profile_hint, valuable_appdata, year_of
@@ -53,6 +53,15 @@ UNIT_LABELS = {"code_project": "Code project", "thunderbird_profile": "Thunderbi
                "browser_profile": "Browser profile"}
 
 
+def set_name(label):
+    """Readable name of a known-file set label (known.py): 'nsrl:RDS_2025' -> 'NSRL'."""
+    if label.startswith("nsrl:"):
+        return "NSRL"
+    if label.startswith("bloom:") or label.startswith("circl"):
+        return "CIRCL hashlookup"
+    return label or "a known-file set"
+
+
 class Analysis:
     def __init__(self, con, cfg):
         self.con = con
@@ -72,6 +81,7 @@ class Analysis:
         self.files = con.execute(
             "SELECT id, path, dir, name, category, subtype, size, mtime, date_best, date_source, "
             "extra, full_hash FROM files").fetchall()
+        self._known()
         self._duplicates()
         self._layout()
         self._containers()
@@ -93,6 +103,28 @@ class Analysis:
 
     def top_units(self):
         return sorted(p for p in self.units if self.unit_of_dir(p)[0] == p)
+
+    # ------------------------------------------------------------- known files
+    def _known(self):
+        """Results of the known-file filter (ADR 0007), per file."""
+        status = {h: (st, src, name) for h, st, src, name in
+                  self.con.execute("SELECT hash, status, source, name FROM known WHERE status IS NOT NULL")}
+        self.known_sets = json.loads(get_meta(self.con, "known_sets") or "[]")
+        self.known_status = {}  # file id -> (status, source, name)
+        for f in self.files:
+            if f[11] in status:
+                self.known_status[f[0]] = status[f[11]]
+        self.known_ids = {fid for fid, v in self.known_status.items() if v[0] == "known"}
+        self.n_known_hashed = self.con.execute("SELECT COUNT(*) FROM known").fetchone()[0]
+
+    def known_label(self):
+        """'CIRCL hashlookup and NSRL': the sets the filter used, for reasons in proposals."""
+        names = []
+        for s in self.known_sets:
+            n = set_name(s.get("label", ""))
+            if n not in names:
+                names.append(n)
+        return " and ".join(names) or "public hash sets"
 
     # ------------------------------------------------------------- duplicates
     def _duplicates(self):
@@ -132,6 +164,12 @@ class Analysis:
         for r in self.pruned:
             lay.add_dir(self.segs(r[0]))
         lay.finish()
+        for fid, path, d, name, cat, sub, size, mtime, date, src, extra, h in self.files:
+            if extra and '"os_version"' in extra:
+                try:
+                    lay.add_version(self.segs(d), json.loads(extra)["os_version"])
+                except (ValueError, KeyError, TypeError):
+                    pass
         self.file_zone = {}
         self.file_source = {}
         self.zone_tot = defaultdict(lambda: [0, 0])
@@ -143,7 +181,7 @@ class Analysis:
             self.file_zone[fid] = zone
             self.zone_tot[zone][0] += 1
             self.zone_tot[zone][1] += size or 0
-            personal = cat in PERSONAL_CATS and zone in KEEP_ZONES
+            personal = cat in PERSONAL_CATS and zone in KEEP_ZONES and fid not in self.known_ids
             if personal:
                 self.personal_ids.add(fid)
             elif cat in PERSONAL_CATS and zone in ("system", "applications"):
@@ -160,6 +198,11 @@ class Analysis:
                 if source is not None:
                     source.observe_name(dsegs[-1])
         self.unusual_personal = unusual
+        # Executables in system or program folders that no known-file set has: custom software or tampering.
+        self.unknown_sw = sorted(
+            ((f[1], f[6] or 0) for f in self.files if f[4] == "executable"
+             and self.file_zone.get(f[0]) in ("system", "applications")
+             and self.known_status.get(f[0], ("",))[0] == "unknown"), key=lambda t: t[0])
         # Mail and browser profiles: where do they come from?
         self.app_profiles = []
         for path, kind in sorted(self.units.items()):
@@ -311,9 +354,9 @@ class Analysis:
     # ------------------------------------------------------------- aggregates
     def _new_agg(self):
         return {"n": 0, "size": 0, "cnt": defaultdict(int), "sz": defaultdict(int), "dmin": None,
-                "dmax": None, "mmax": None, "sw": 0, "dupn": 0, "dupb": 0}
+                "dmax": None, "mmax": None, "sw": 0, "kn": 0, "dupn": 0, "dupb": 0}
 
-    def _add(self, start, cat, size, n, date, mtime, sw, dup):
+    def _add(self, start, cat, size, n, date, mtime, sw, dup, known=False):
         for p in ancestors(start, self.root):
             a = self.agg.get(p)
             if a is None:
@@ -331,6 +374,8 @@ class Analysis:
                 a["mmax"] = mtime
             if sw:
                 a["sw"] += size
+            if known:
+                a["kn"] += size
             if dup:
                 a["dupn"] += n
                 a["dupb"] += size
@@ -351,7 +396,8 @@ class Analysis:
             self.cat_tot[cat][0] += 1
             self.cat_tot[cat][1] += size
             self.year_cat[date[:4] if date else "no date"][cat] += size
-            self._add(d, cat, size, 1, date, mtime, self.is_sw(path, cat, name), fid in self.dup_of)
+            known = fid in self.known_ids
+            self._add(d, cat, size, 1, date, mtime, known or self.is_sw(path, cat, name), fid in self.dup_of, known)
             unit = self.unit_of_dir(d)
             if unit:
                 us = self.unit_stats[unit[0]]
@@ -442,6 +488,27 @@ class Analysis:
                                         100 * share, time.strftime("%Y", time.localtime(a["mmax"])))))
         cleanup_dirs.update(sw_set)
 
+        # 1b) Folders made of files known to the hash sets (ADR 0007), wherever they were copied.
+        if self.known_ids:
+            kn_set = set()
+            sets = self.known_label()
+            for p in sorted(self.agg):
+                a = self.agg[p]
+                if p == self.root or a["size"] < cfg["software_min_bytes"]:
+                    continue
+                if a["kn"] / a["size"] < cfg["software_share"]:
+                    continue
+                if self.unit_of_dir(p) or self._under(p, kn_set) or self._under(p, cleanup_dirs):
+                    continue
+                kn_set.add(p)
+                why = "%.0f%% of its bytes are files known to %s (OS and software vendors)" % (
+                    100 * a["kn"] / a["size"], sets)
+                personal = sum(n for c, n in a["cnt"].items() if c in PERSONAL_CATS)
+                if personal:
+                    why += ". Review: %d files inside look personal (documents, photos…)" % personal
+                props.append(self._prop("known_software", p, True, a["n"], a["size"], a["mmax"], why))
+            cleanup_dirs.update(kn_set)
+
         # 2) Pruned folders: dependencies, caches, trash, old software bundles.
         for path, kind, mode, note, regen, nfiles, nbytes, newest, oldest in self.pruned:
             if self._under(path, cleanup_dirs):
@@ -476,6 +543,11 @@ class Analysis:
             elif fid in self.dup_of and not in_unit:
                 props.append(self._prop("duplicate", path, False, 1, size, mtime, "identical copy",
                                         self.dup_of[fid]))
+            elif not in_unit and fid in self.known_ids and (size or 0) >= cfg["software_min_bytes"]:
+                st, kset, kname = self.known_status[fid]
+                props.append(self._prop("known_software", path, False, 1, size, mtime,
+                                        "file known to %s%s" % (set_name(kset), " as %s" % kname if kname and
+                                                                kname.lower() != name.lower() else "")))
             elif (not in_unit and self.is_sw(path, cat, name) and (size or 0) >= 1024 * 1024
                   and mtime and mtime < self.cutoff):
                 props.append(self._prop("old_installer", path, False, 1, size, mtime,

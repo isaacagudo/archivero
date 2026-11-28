@@ -1,7 +1,7 @@
 # Telling personal data from system files
 
-**Status: zones and provenance implemented in v0.2 (`layouts.py`, `zones.py`); the
-known-file hash filter (section 2) is next.** Old drives and NAS shares often contain whole
+**Status: implemented in v0.2: zones and provenance (`layouts.py`, `zones.py`), exact OS
+versions (`osversion.py`) and the known-file hash filter (section 2, `known.py`).** Old drives and NAS shares often contain whole
 system disks copied as-is: a `C:` drive from 2006, a Mac home folder, a Linux root
 partition. The goal is to keep what a *person* created (photos, documents, mail,
 chats) and discard what an *operating system or installer* put there (executables,
@@ -32,17 +32,33 @@ Every file gets a `zone`:
 ### How a layout is recognized
 
 archivero detects **OS roots** and **user homes** from a handful of names. It reads
-no file contents, except a few tiny text files such as `etc/os-release`.
+no file contents, except the few files that state the exact version (see
+[Exact versions](#exact-versions)).
 
 | Detected | Evidence | Era / version hints |
 |---|---|---|
-| Windows system drive | `Windows/` plus `Program Files/` | `Documents and Settings/` → 2000/XP/2003. `Users/` → Vista or later. `Program Files (x86)/` → 64-bit. `Windows.old/` → an upgraded system (it contains an **older Users folder**) |
+| Windows system drive | `Windows/` plus `Program Files/` | `Documents and Settings/` → 2000/XP/2003. `Users/` → Vista or later. `Program Files (x86)/` → 64-bit. `Windows.old/` → an upgraded system (it contains an **older Users folder**). `Windows/System32/config/SOFTWARE` gives the exact version |
 | Windows profile v1 (2000/XP) | `NTUSER.DAT` + `My Documents/` or `Local Settings/` | Profiles live in `Documents and Settings\<user>` |
 | Windows profile v2 (Vista or later) | `NTUSER.DAT` + `AppData/` | Profiles live in `Users\<user>` |
 | macOS root | `System/Library/`, `Applications/`, `Users/` | `System/Library/CoreServices/SystemVersion.plist` gives the exact version |
 | macOS home | `Library/` + `Desktop/` + `Documents/` | `Library/Mobile Documents` = iCloud Drive |
 | Linux/Unix root | `etc/`, `usr/`, `bin/` (or a symlink to `usr/bin`), `var/` | `etc/os-release` gives the distribution and version |
 | Linux home | `.bashrc`, `.profile`, `.config/`, `.local/` | XDG user folders may be localized (`Documentos`, `Imágenes`…) |
+
+### Exact versions
+
+When a copied drive still holds the file where its OS records its version, `scan` reads it
+(only at these paths, and only a few kilobytes) and the description uses it instead of the era
+guess ([ADR 0008](adr/0008-exact-os-versions.md)):
+
+| OS | File | Example |
+|---|---|---|
+| Windows | `Windows/System32/config/SOFTWARE` (registry hive, `Microsoft\Windows NT\CurrentVersion`) | Windows 7 Professional Service Pack 1, build 7601 |
+| Windows 2000/XP | `Windows/System32/prodspec.ini` | Windows XP Professional |
+| macOS | `System/Library/CoreServices/SystemVersion.plist` | Mac OS X 10.6.8 Snow Leopard, build 10K549 |
+| Linux | `etc/os-release` (or `usr/lib/os-release`), then `etc/lsb-release`, `etc/*-release`, `etc/debian_version` | Ubuntu 10.04.4 LTS |
+
+The list is data (`layouts.VERSION_FILES`); the first file found, in that order, wins.
 
 ### Windows
 
@@ -164,23 +180,26 @@ imaged old drive is described without extracting it.
 
 ## 2. File knowledge: known-file hash sets
 
-| Source | What it is | How archivero would use it |
+| Source | What it is | How archivero uses it |
 |---|---|---|
-| **NIST NSRL RDS** | NIST's Reference Data Set: hashes of software files, published every quarter. The RDSv3 sets are split into *modern*, *legacy*, *android* and *ios*, each also available as a smaller *minimal* edition. Files are large | Import into a local index (optional, large) |
-| **CIRCL hashlookup** | A free public API run by CIRCL, Luxembourg's CERT. It looks up hashes in NSRL and other sources, including common Windows 10/11 builds and Linux distribution packages | **Online mode**: opt-in only, and only for executables and libraries, never for documents or photos |
-| **CIRCL hashlookup Bloom filter** | Offline Bloom filter of the hashlookup database: about 700 MB for 298 million hashes | **Offline mode, the default.** Load once, check SHA-1 locally, and no hash ever leaves the machine |
+| **NIST NSRL RDS** | NIST's Reference Data Set: hashes of software files, published every quarter. The RDSv3 sets are split into *modern*, *legacy*, *android* and *ios*, each also available as a smaller *minimal* edition. Files are large | `--nsrl RDS.db`: the SQLite file is opened read-only and its `FILE` view is joined with the candidates; nothing is imported |
+| **CIRCL hashlookup** | A free public API run by CIRCL, Luxembourg's CERT. It looks up hashes in NSRL and other sources, including common Windows 10/11 builds and Linux distribution packages | `--online`: opt-in only, and only for executables and libraries that the offline sets do not know, each sent at most once; never documents or photos |
+| **CIRCL hashlookup Bloom filter** | Offline Bloom filter of the hashlookup database (`hashlookup-full.bloom`, about 1 GB), in the DCSO format, holding upper-case SHA-1s | `--bloom hashlookup-full.bloom`, **the default way.** Checked in place (mmap), and no hash ever leaves the machine |
 
 Design rules:
 
 - **Only hash what could be software.** Executables, libraries, disk images and
-  files with no extension that sit in `system` or `applications` zones, or any
-  file outside a `user_data` zone. Photos and documents are not looked up: a known
-  hash for them is meaningless, and sending them would leak information.
+  installers anywhere; code, configuration, unknown types and files with no
+  extension outside a `user_data` zone. Documents, photos, mail, audio, keys and
+  databases are not looked up: a known hash for them is meaningless, and sending
+  them would leak information. Stock pictures can be looked up with `--images`,
+  outside user folders and only in the offline sets.
 - These sets use **SHA-1/MD5**, so the known-file check computes SHA-1 for those
-  candidates (in addition to BLAKE2b for duplicates).
-- A **known** file is marked `known_software` and joins the cleanup proposals.
-  An **unknown** executable in a system zone is flagged for review: it could be
-  custom software or tampering.
+  candidates (in the same read as BLAKE2b), once per content.
+- A **known** file joins the cleanup proposals as `known_software` (alone, or as the
+  top-most folder where known files hold most of the bytes), counts as software and
+  never as personal. An **unknown** executable in a system zone is listed for review:
+  it could be custom software or tampering.
 
 ## 3. Personal-data signal
 
@@ -192,12 +211,12 @@ zone (layout)  +  category (type)  +  known hash?
    user_appdata    email/database       no          → personal, review
    system          executable           yes         → system (discard)
    system          executable           no          → unknown software (review)
+   unknown         executable           yes         → known software, copied out of place (discard)
    unknown         photo                no          → personal (keep)
 ```
 
-The report would gain a **"Personal data"** view: where the irreplaceable things
-are, grouped by person (per detected user profile), source machine (per detected
-OS root) and year.
+The report's **"Personal data"** and **"Where this came from"** views show where the
+irreplaceable things are, per zone and per source machine or profile.
 
 ## 4. Other forensic projects worth reusing
 

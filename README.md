@@ -31,7 +31,8 @@
 | 🧑‍💻 **Code projects** | Recognized as a whole (`package.json`, `.git`, `pom.xml`…), without getting lost in `node_modules` |
 | ✉️ **Email** | Thunderbird profiles and their **mbox** files, even without an extension, plus loose PST and EML files |
 | 🗜️ **Old software** | Folders of installers, ISOs and `.app` bundles that nobody has touched in years |
-| 🖥️ **Old computers** | Recognizes copied Windows, macOS and Linux drives and profiles, **even partial copies**, keeps personal files apart from system files, and says where they came from: *"probably a Dell laptop (Latitude D630), Windows XP, personal files from 2006–2008"* |
+| 🖥️ **Old computers** | Recognizes copied Windows, macOS and Linux drives and profiles, **even partial copies**, keeps personal files apart from system files, and says where they came from: *"Windows XP Service Pack 3, probably a Dell laptop (Latitude D630), personal files from 2006–2008"*. The exact version comes from the drive itself (registry, `SystemVersion.plist`, `os-release`) when it is there |
+| 🔎 **Known software** | Recognizes OS and program files **by content**, even copied out of place, with the public NSRL and CIRCL hashlookup sets, **offline** |
 | 🗃️ **Archives and disk images** | Looks inside zip, tar, 7z, rar, ISO, DMG, VMDK… **without extracting them**, and tells you whether a backup zip is already extracted somewhere else |
 | 👯 **Duplicates** | Confirmed by content in two passes, with a sensible rule for which copy to keep |
 | 🧹 **Junk** | `.DS_Store`, `Thumbs.db`, network trash folders, caches and regenerable dependencies |
@@ -98,6 +99,24 @@ images are **flagged, not removed**. It is resumable, like everything else, and 
 [memento](https://github.com/isaacagudo/memento) builds its timeline from. Details in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#media-index-media_indexpy).
 
+### Known OS and software files
+
+```bash
+curl -O https://cra.circl.lu/hashlookup/hashlookup-full.bloom   # once, about 1 GB
+archivero known --db nas.db --bloom hashlookup-full.bloom          # and/or --nsrl RDS_modern_minimal.db
+```
+
+`known` computes the SHA-1 of the files that could be software (programs, libraries,
+installers, and other non-personal files outside user folders; never documents, photos
+or mail) and looks them up in public sets of files shipped by operating systems and
+software vendors. The CIRCL Bloom filter and NIST's NSRL RDSv3 databases are checked
+**on your machine**; nothing is sent anywhere unless you add `--online`, and then only
+the SHA-1 of executables the offline sets do not know. Known files become cleanup
+proposals even when they were copied out of place (an old `Program Files` inside
+`Backup/old`, a loose installer), and executables in system folders that no set knows
+are listed for review. Hashing is done once and resumable, so a new set can be checked
+later without reading the files again.
+
 Happy with the proposal? Generate a plan and apply it **by copying** into a new
 structure:
 
@@ -122,6 +141,7 @@ flowchart LR
     D -->|report| R[report.html<br/>CSV]
     D -->|plan| P[plan.csv<br/>editable]
     D -->|media| M[Media index<br/>+ thumbnails]
+    D -->|known| K[SHA-1 → NSRL /<br/>CIRCL hashlookup]
     P -->|apply| N[(New structure<br/>copy only)]
 ```
 
@@ -148,10 +168,10 @@ flowchart LR
 | `report.html` | Browse a summary: cleanup, types, years, email, music, folders, duplicates |
 | `cleanup_proposals.csv` | See what could go, how much space it frees, and why |
 | `folders.csv` | Get every folder with its type ("Photos and videos", "Software", "Code project"…), size and dates |
-| `files.csv` | Get one row per file: category, date, where the date came from, hash |
+| `files.csv` | Get one row per file: category, zone, date, where the date came from, hash, and whether a known-file set knows it |
 | `duplicates.csv` | Review groups of identical copies, with the one to keep marked |
 | `units.csv` | List code projects and mail profiles, with their mailboxes |
-| `sources.csv` | See every copied drive or profile, what it looks like and the evidence behind it |
+| `sources.csv` | See every copied drive or profile, what it looks like, its exact OS version when known, and the evidence behind it |
 | `containers.csv` | Review every archive and disk image: content, how much is already on disk, suggestion |
 | `archive_members.csv` | Browse the files inside archives without opening them |
 
@@ -163,6 +183,7 @@ flowchart LR
 obsolete_years = 6       # years untouched before software counts as obsolete
 software_share = 0.8     # minimum share of software in a folder
 long_video_min = 40      # minutes before a video counts as a movie (with --probe-video)
+known_bloom = "/data/hashlookup-full.bloom"   # default set for 'archivero known'
 
 [categories]
 code = ["cairo", "move"]
@@ -183,8 +204,10 @@ catalogs, WhatsApp backups or virtual machines, takes a few lines. See
 ## 🗺️ Roadmap
 
 - **v0.2. Personal data vs. system files** (in progress): OS layouts, zones,
-  provenance and the media index are done; next is filtering known software with the
-  NSRL and CIRCL hashlookup hash sets ([design](docs/OS_LAYOUTS.md)).
+  provenance, exact OS versions, the known-file filter (NSRL and CIRCL hashlookup) and
+  the media index are done; left are `Windows.old`, Photos libraries and iCloud Drive
+  as special cases, and the known-file filter for archive members
+  ([design](docs/OS_LAYOUTS.md)).
 - **v0.3. Email, inside the mailboxes:** messages, senders and dates for every mbox,
   and messages duplicated across profiles.
 - **v0.4:** whole duplicated folders (Merkle hash) and near-identical photos.

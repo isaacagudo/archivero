@@ -5,7 +5,7 @@ import os
 import sys
 import time
 
-from . import dates, media
+from . import dates, media, osversion
 from .categories import build_ext_map, classify
 from .db import get_meta, set_meta
 from .detectors import CHILD_DETECTORS, DIR_DETECTORS, PRUNED, UNIT
@@ -75,6 +75,10 @@ def scan(con, root, cfg, exif=False, probe_video=False, tags=False, measure_prun
     n_seen = n_new = bytes_seen = pending = 0
     stack = [(root, frozenset())]  # (folder, kinds of the units that contain it)
 
+    def rel_low(d):
+        rel = os.path.relpath(d, root)
+        return () if rel == "." else tuple(rel.lower().split(os.sep))
+
     def log_error(p, err):
         con.execute("INSERT INTO errors(path,error,at) VALUES(?,?,?)", (p, str(err), time.time()))
 
@@ -132,9 +136,12 @@ def scan(con, root, cfg, exif=False, probe_video=False, tags=False, measure_prun
 
             n_seen += 1
             bytes_seen += st.st_size
-            row = con.execute("SELECT size, mtime FROM files WHERE path=?", (e.path,)).fetchone()
+            row = con.execute("SELECT size, mtime, extra FROM files WHERE path=?", (e.path,)).fetchone()
+            low = e.name.lower()
+            vfile = osversion.match(rel_low(d), low) if low in osversion.VERSION_FILE_NAMES else None
             if row and row[0] == st.st_size and abs((row[1] or 0) - st.st_mtime) < 1:
-                continue  # already inventoried and unchanged
+                if not vfile or (row[2] and '"os_version"' in row[2]):
+                    continue  # already inventoried and unchanged
 
             ext, cat, subtype = classify(e.name, names_low, in_mail)
             method = duration = None
@@ -155,6 +162,10 @@ def scan(con, root, cfg, exif=False, probe_video=False, tags=False, measure_prun
                 t, duration = media.audio_tags(e.path)
                 if t:
                     extra.update(t)
+            if vfile:
+                ver = osversion.read_version(e.path, vfile[1], st.st_size)
+                if ver:
+                    extra["os_version"] = dict(ver, file=vfile[0])
             cands.append((dates.from_filename(e.name), "filename"))
             cands.append((dates.ts_to_str(st.st_mtime), "mtime"))
             date_best, date_src = dates.best_date(cands)
